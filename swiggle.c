@@ -84,7 +84,6 @@ int	processdir(char *);
 int	check_cache(char *, struct stat *);
 void	create_cache_dirs(char *);
 void	create_images(char *, struct imginfo *, int);
-void	find_orphans(char *, char*, struct imginfo *, int);
 int	sort_by_filename(const void *, const void *);
 int	sort_by_filesize(const void *, const void *);
 int	sort_by_mtime(const void *, const void *);
@@ -104,7 +103,7 @@ void	version(void);
 int 
 main(int argc, char **argv)
 {
-	char buf[MAXPATHLEN], *eptr, final[MAXPATHLEN], tmp[MAXPATHLEN];
+	char buf[MAXPATHLEN], *eptr;
 	int albumcount, i, imgcount;
 	struct dirent *albums, *dent;
 	struct stat sb;
@@ -210,11 +209,8 @@ main(int argc, char **argv)
 	if (argv[0][strlen(argv[0])-1] == '/')
 		argv[0][strlen(argv[0])-1] = '\0';
 	
-	sprintf(final, "%s/index.html", argv[0]);
-	sprintf(tmp, "%s.tmp", final);
-	
-	if ((html = fopen(tmp, "w")) == NULL) {
-		fprintf(stderr, "%s: can't fopen(%s): %s\n", progname, tmp, 
+	if ((html = fopen("/dev/null", "w")) == NULL) {
+		fprintf(stderr, "%s: can't fopen(%s): %s\n", progname, "/dev/null", 
 		    strerror(errno));
 		exit(EXIT_FAILURE);
 	}
@@ -287,14 +283,8 @@ main(int argc, char **argv)
 	free(albums);
 	
 	if (fclose(html) == EOF) {
-		fprintf(stderr, "%s: can't fclose(%s): %s\n", progname, tmp, 
+		fprintf(stderr, "%s: can't fclose(%s): %s\n", progname, "/dev/null", 
 		    strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	
-	if (rename(tmp, final)) {
-		fprintf(stderr, "%s: can't rename(%s, %s): %s\n", progname,
-		    tmp, final, strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 	
@@ -313,7 +303,7 @@ int
 processdir(char *dir)
 {
 	char *i, *p;
-	int imgcount, x;
+	int imgcount;
 	struct dirent *dent;
 	struct imginfo *imglist;
 #ifdef NO_D_TYPE
@@ -373,23 +363,18 @@ processdir(char *dir)
 	}
 	
 	if (imgcount) {
-		create_cache_dirs(dir);
 		create_images(dir, imglist, imgcount);
 		
 		/* Sort the list according to desired sorting function. */
 		qsort(imglist, imgcount, sizeof(struct imginfo), sort_func);
-		
+
+#if 0  /**** pts ****/
 		create_html(dir, imglist, imgcount);
 		x = create_thumbindex(dir, imglist, imgcount);
 		printf("%d thumbnail index pages created.\n", x);
+#endif
 	}
-	
-	/* Removed orphaned files. */
-	if (rm_orphans) {
-		find_orphans(dir, ".scaled", imglist, imgcount);
-		find_orphans(dir, ".thumbs", imglist, imgcount);
-	}
-	
+
 	free(imglist);
 	
 	printf("%d image%s processed in album '%s'.\n", imgcount,
@@ -446,12 +431,31 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			    ori, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
+#if 0  /**** pts ****/
+		sprintf(final, "%s/.scaled/%s", dir, imglist[i].filename);
+#else
+		{
+			const char* r = ori + strlen(ori);
+			const char* p = r;
+			size_t prefixlen;
+			if (r - ori >= 7 && 0 == memcmp(r - 7, ".th.jpg", 7))
+				continue;
+
+			/* Replace image extension with .th.jpg, save result to th_ori */
+			while (p != ori && p[-1] != '/' && p[-1] != '.') {
+				--p;
+			}
+			prefixlen = (p != ori && p[-1] == '.') ? p - ori - 1 : r - ori;
+			memcpy(final, ori, prefixlen);
+			strcpy(final + prefixlen, ".th.jpg");
+		}
+#endif
+
 		/*
 		 * Check if the cached image exists and is newer than the
 		 * original.
 		 */
-		sprintf(final, "%s/.scaled/%s", dir, imglist[i].filename);
 		if (force)
 			cached = 0;
 		else
@@ -564,6 +568,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			cinfo.input_components = dinfo.num_components;
 			cinfo.in_color_space = dinfo.out_color_space;
 			jpeg_set_defaults(&cinfo);
+			jpeg_set_quality(&cinfo, 50, FALSE);  /**** pts ****/
 			
 			o = malloc(cinfo.image_width * cinfo.image_height *
 			    cinfo.input_components * SIZE_UCHAR);
@@ -582,7 +587,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			}
 			
 			/* Write the image out. */
-			jpeg_start_compress(&cinfo, TRUE);
+			jpeg_start_compress(&cinfo, FALSE);
 			while (cinfo.next_scanline < cinfo.image_height) {
 				row_pointer[0] = &o[cinfo.input_components *
 				    cinfo.image_width * cinfo.next_scanline];
@@ -600,118 +605,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 				exit(EXIT_FAILURE);
 			}
 		}
-		
-		/*
-		 * The same stuff applies to the thumbnails.
-		 * First check if we the thumbnail needs to be created.
-		 */
-		sprintf(final, "%s/.thumbs/%s", dir, imglist[i].filename);
-		if (force)
-			cached = 0;
-		else
-			cached = check_cache(final, &sb);
-		
-		/* We need to generate the thumbnail. */
-		if (cached == 0) {
-			/*
-			 * We haven't already read the original image, do so
-			 * now.
-			 */
-			if (ori_in_mem == 0) {
-				/* Again, use libjpegs pre-scaling factor. */
-				factor = (double)dinfo.image_width /
-				    (double)imglist[i].thumbwidth;
-				if ((int) factor >= 8)
-					dinfo.scale_denom = 8;
-				else if ((int) factor >= 4)
-					dinfo.scale_denom = 4;
-				else if ((int) factor >= 2)
-					dinfo.scale_denom = 2;
-				
-				jpeg_start_decompress(&dinfo);
-				row_width = dinfo.output_width *
-				    dinfo.num_components;
-				
-				p = malloc(row_width * dinfo.output_height *
-				    SIZE_UCHAR);
-				if (p == NULL) {
-					fprintf(stderr, "%s: can't malloc: "
-					    "%s\n", progname, strerror(errno));
-					exit(EXIT_FAILURE);
-				}
-				
-				samp = (*dinfo.mem->alloc_sarray)
-				    ((j_common_ptr)&dinfo, JPOOL_IMAGE,
-				    row_width, 1);
-				
-				/* Read the original into memory. */
-				n = 0;
-				while (dinfo.output_scanline <
-				    dinfo.output_height) {
-					jpeg_read_scanlines(&dinfo, samp, 1);
-					memcpy(&p[n*row_width], *samp,
-					    row_width);
-					n++;
-				}
-				jpeg_finish_decompress(&dinfo);
-				ori_in_mem = 1;
-			}
-			
-			sprintf(tmp, "%s.tmp", final);
-			if ((outfile = fopen(tmp, "wb")) == NULL) {
-				fprintf(stderr, "%s: can't fopen(%s): %s\n",
-				    progname, tmp, strerror(errno));
-				exit(EXIT_FAILURE);
-			}
-			
-			/* Prepare the compression object. */
-			jpeg_create_compress(&cinfo);
-			jpeg_stdio_dest(&cinfo, outfile);
-			cinfo.image_width = imglist[i].thumbwidth;
-			cinfo.image_height = imglist[i].thumbheight;
-			cinfo.input_components = dinfo.num_components;
-			cinfo.in_color_space = dinfo.out_color_space;
-			jpeg_set_defaults(&cinfo);
-			
-			if (o == NULL) {
-				o = malloc(cinfo.image_width *
-				    cinfo.image_height *
-				    cinfo.input_components * SIZE_UCHAR);
-				if (o == NULL) {
-					fprintf(stderr, "%s: can't malloc: "
-					    "%s\n", progname, strerror(errno));
-					exit(EXIT_FAILURE);
-				}
-			}
-			
-			/* Resize the image. */
-			if (resize_func(&dinfo, &cinfo, p, &o)) {
-				fprintf(stderr, "%s: can't resize image '%s': "
-				    "%s\n", progname, imglist[i].filename,
-				    strerror(errno));
-				exit(EXIT_FAILURE);
-			}
-			
-			/* Write out the thumbnail. */
-			jpeg_start_compress(&cinfo, TRUE);
-			while (cinfo.next_scanline < cinfo.image_height) {
-				row_pointer[0] = &o[cinfo.input_components *
-				    cinfo.image_width * cinfo.next_scanline];
-				jpeg_write_scanlines(&cinfo, row_pointer, 1);
-				n++;
-			}
-			jpeg_finish_compress(&cinfo);
-			fclose(outfile);
-			jpeg_destroy_compress(&cinfo);
-			
-			if (rename(tmp, final)) {
-				fprintf(stderr, "%s: can't rename(%s, %s): "
-				    "%s\n", progname, tmp, final,
-				    strerror(errno));
-				exit(EXIT_FAILURE);
-			}
-		}
-		
+
 		fclose(infile);
 		jpeg_destroy_decompress(&dinfo);
 		
@@ -730,54 +624,6 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 	
 	if (id != NULL)
 		free(id);
-}
-
-/*
- * Creates the directories that will keep the thumbnails and scaled 
- * images in the directory given in parameter "dir".
- */
-void 
-create_cache_dirs(char *dir)
-{
-	char buf[MAXPATHLEN];
-	int r;
-	struct stat sb;
-	
-	sprintf(buf, "%s/.scaled", dir);
-	r = stat(buf, &sb);
-	if (r) {
-		if (errno != ENOENT) {
-			fprintf(stderr, "%s: can't stat(%s): %s\n", progname,
-			    buf, strerror(errno));
-			exit(EXIT_FAILURE);
-		} else if (mkdir(buf, 0777)) {
-			fprintf(stderr, "%s: can't mkdir(%s): %s\n", progname,
-			    buf, strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-	} else if (!S_ISDIR(sb.st_mode)) {
-		fprintf(stderr, "%s: '%s' exists, but is not a directory\n",
-		    progname, buf);
-		exit(EXIT_FAILURE);
-	}
-	
-	sprintf(buf, "%s/.thumbs", dir);
-	r = stat(buf, &sb);
-	if (r) {
-		if (errno != ENOENT) {
-			fprintf(stderr, "%s: can't stat(%s): %s\n", progname,
-			    buf, strerror(errno));
-			exit(EXIT_FAILURE);
-		} else if (mkdir(buf, 0777)) {
-			fprintf(stderr, "%s: can't mkdir(%s): %s\n", progname,
-			    buf, strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-	} else if (!S_ISDIR(sb.st_mode)) {
-		fprintf(stderr, "%s: %s exists, but is not a directory\n",
-		    progname, buf);
-		exit(EXIT_FAILURE);
-	}
 }
 
 int
@@ -800,75 +646,6 @@ check_cache(char *filename, struct stat *sb_ori)
 		cached = 0;
 
 	return (cached);
-}
-
-/*
- * Finds scaled images or thumbnails that have no
- * corresponding image in the album directory.
- */
-void
-find_orphans(char *dir, char *subdir, struct imginfo *imglist, int imgcount)
-{
-	DIR *curdir;
-	struct dirent *dent;
-	char path[MAXPATHLEN], buf[MAXPATHLEN], *p;
-	int x, found;
-#ifdef NO_D_TYPE
-	struct stat sb;
-#endif
-
-	sprintf(path, "%s/%s", dir, subdir);
-	if ((curdir = opendir(path)) != NULL) {
-		while ((dent = readdir(curdir)) != NULL) {
-			found = 0;
-			
-			/*
-			 * We only want regular files that have a filename
-			 * suffix.
-			 */
-#ifdef NO_D_TYPE
-			sprintf(buf, "%s/%s", path, dent->d_name);
-			if ((stat(buf, &sb) == 0 && !S_ISREG(sb.st_mode)) || 
-			    ((p = strrchr(dent->d_name, '.')) == NULL))
-#else
-			if ((dent->d_type != DT_REG) || 
-			    (p = strrchr(dent->d_name, '.')) == NULL)
-#endif
-				continue;
-			p++;
-			
-			/* We currently only handle .jpg files. */
-			if (strcasecmp(p, "jpg") != 0 &&
-			    strcasecmp(p, "jpeg") != 0)
-				continue;
-			
-			/* Look for the parent image in the image list. */
-			for (x = 0; x < imgcount; x++) {
-				if (!strcmp(dent->d_name, imglist[x].filename))
-					found = 1;
-			}
-			
-			/* Parent image wasn't found, so remove this one. */
-			if (!found) {
-#ifndef NO_D_TYPE
-				sprintf(buf, "%s/%s", path, dent->d_name);
-#endif
-				if (unlink(buf))
-					fprintf(stderr, "can't unlink(%s)\n",
-					    buf);
-				else
-					printf("deleted orphan %s\n", buf);
-				
-				/* Remove orphaned HTML file, too. */
-				sprintf(buf, "%s/%s.html", dir, dent->d_name);
-				if (unlink(buf) == 0)
-					printf("deleted orphan %s\n", buf);
-			}
-		}
-		if (closedir(curdir))
-			fprintf(stderr, "can't closedir(%s)\n", path);
-	} else
-		fprintf(stderr, "can't opendir(%s)\n", buf);
 }
 
 /*
