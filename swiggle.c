@@ -103,13 +103,10 @@ void	version(void);
 int 
 main(int argc, char **argv)
 {
-	char buf[MAXPATHLEN], *eptr;
-	int albumcount, i, imgcount;
-	struct dirent *albums, *dent;
+	char *eptr;
+	int i;
 	struct stat sb;
 	time_t now;
-	DIR *topdir;
-	FILE *html;
 	
 	progname = argv[0];
 	sort_func = sort_by_filename;
@@ -209,87 +206,8 @@ main(int argc, char **argv)
 	if (argv[0][strlen(argv[0])-1] == '/')
 		argv[0][strlen(argv[0])-1] = '\0';
 	
-	if ((html = fopen("/dev/null", "w")) == NULL) {
-		fprintf(stderr, "%s: can't fopen(%s): %s\n", progname, "/dev/null", 
-		    strerror(errno));
-		exit(EXIT_FAILURE);
-	}
+        processdir(argv[0]);
 	
-	fprintf(html, "<html>\n"
-	    "<head>\n"
-	    "<title>%s</title>\n"
-	    "<link rel=\"stylesheet\" type=\"text/css\" "
-	    "href=\"swiggle.css\" />\n"
-	    "</head>\n"
-	    "<body>\n"
-	    "<h1 class=\"galleryheadline\">%s</h1>\n"
-	    "<ul class=\"albumlist\">\n", defaultdesc, defaultdesc);
-	
-	/*
-	 * Open the directory given on the command line and descend into
-	 * every subdir.
-	 */
-	if ((topdir = opendir(argv[0])) == NULL) {
-		fprintf(stderr, "%s: can't opendir(%s): %s\n", progname,
-		    argv[0], strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	
-	albumcount = 0;
-	albums = NULL;
-
-	/* Read in the directory contents and sort by filename. */
-	while ((dent = readdir(topdir)) != NULL) {
-		albums = realloc(albums, (albumcount+1)* sizeof(struct dirent));
-		if (albums == NULL) {
-			fprintf(stderr, "%s: can't realloc: %s\n", progname, 
-			    strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-		memcpy(&albums[albumcount], dent, sizeof(struct dirent));
-		albumcount++;
-	}
-	
-	if (closedir(topdir)) {
-		fprintf(stderr, "%s: can't closedir(%s): %s\n", progname,
-		    argv[0], strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	
-	qsort(albums, albumcount, sizeof(struct dirent), sort_dirs);
-
-	/* Process each subdirectory (== "album"). */
-	for (i = 0; i < albumcount; i++) {
-#ifdef NO_D_TYPE
-		sprintf(buf, "%s/%s", argv[0], albums[i].d_name);
-		if (stat(buf, &sb) == 0 && S_ISDIR(sb.st_mode) &&
-		    albums[i].d_name[0] != '.') {
-#else
-		if (albums[i].d_type == DT_DIR && albums[i].d_name[0] != '.') {
-			sprintf(buf, "%s/%s", argv[0], albums[i].d_name);
-#endif
-			printf("Directory %s\n", buf);
-			imgcount = processdir(buf);
-			fprintf(html, "<li class=\"albumitem\">"
-			    "<a href=\"%s/index.html\">%s</a> (%d image%s)\n",
-			    albums[i].d_name,
-			    albumdesc != NULL ? albumdesc : albums[i].d_name,
-			    imgcount, imgcount != 1 ? "s" : "");
-		}
-	}
-
-	fprintf(html, "</ul>\n%s</body>\n</html>\n", generated);
-
-	free(albums);
-	
-	if (fclose(html) == EOF) {
-		fprintf(stderr, "%s: can't fclose(%s): %s\n", progname, "/dev/null", 
-		    strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	
-	printf("%d album%s processed.\n", albumcount,
-	    albumcount != 1 ? "s" : "");
 	exit(EXIT_SUCCESS);
 }
 
@@ -474,7 +392,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 		}
 		jpeg_create_decompress(&dinfo);
 		jpeg_stdio_src(&dinfo, infile);
-		(void) jpeg_read_header(&dinfo, TRUE);
+		(void)jpeg_read_header(&dinfo, FALSE);  /* !! don't abort the program on failure */
 		
 		imglist[i].filesize = sb.st_size;
 		imglist[i].mtime = sb.st_mtime;
@@ -494,8 +412,6 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			    EXIF_TAG_APERTURE_VALUE);
 			imglist[i].flash = get_exif_data(ed, EXIF_TAG_FLASH);
 		} else {
-			fprintf(stderr, "   %s: no EXIF data found\n",
-			    imglist[i].filename);
 			imglist[i].model = NULL;
 			imglist[i].datetime = NULL;
 			imglist[i].exposuretime = NULL;
