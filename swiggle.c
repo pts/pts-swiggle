@@ -63,7 +63,6 @@
  */
 char *albumdesc = "";
 char *defaultdesc = "my webgallery";
-char generated[1024];
 char *progname = "";
 int cols = 5;
 int rows = 3;
@@ -105,8 +104,8 @@ main(int argc, char **argv)
 {
 	char *eptr;
 	int i;
+	int exit_code;
 	struct stat sb;
-	time_t now;
 	
 	progname = argv[0];
 	sort_func = sort_by_filename;
@@ -181,34 +180,43 @@ main(int argc, char **argv)
 	
 	argc -= optind;
 	argv += optind;
-	
-	if (argc != 1)
+	if (argc < 1)
 		usage();
-	
-	if (stat(argv[0], &sb)) {
-		fprintf(stderr, "%s: can't stat(%s): %s\n", progname, argv[0],
-		    strerror(errno));
-		exit(EXIT_FAILURE);
+
+	exit_code = EXIT_SUCCESS;
+
+	/* Put the dirs to increasing order for deterministic processing. */
+	qsort(argv, argc, sizeof argv[0],
+	      (int(*)(const void*,const void*))strcmp);
+
+	for (i = 0; i < argc; ++i) {	
+		if (stat(argv[i], &sb)) {
+			fprintf(stderr, "%s: can't stat(%s): %s\n", progname, argv[i],
+			    strerror(errno));
+			exit_code = EXIT_FAILURE;
+			continue;
+		}
+
+		if (!S_ISDIR(sb.st_mode)) {
+			fprintf(stderr, "%s: '%s' is not a directory\n", progname,
+			    argv[i]);
+			exit_code = EXIT_FAILURE;
+			continue;
+		}
+
+		if (argv[i][strlen(argv[i])-1] == '/')
+			argv[i][strlen(argv[i])-1] = '\0';
+
+		processdir(argv[i]);
 	}
 	
-	if (!S_ISDIR(sb.st_mode)) {
-		fprintf(stderr, "%s: '%s' is not a directory\n", progname,
-		    argv[0]);
-		usage();
-	}
-	
-	now = time(NULL);
-	sprintf(generated, "<hr />\n"
-	    "<div class=\"generated\">Web gallery generated %s with "
-	    "<a href=\"http://homepage.univie.ac.at/l.ertl/swiggle/\">"
-	    "swiggle %s</a></div>\n", ctime(&now), SWIGGLE_VERSION);
-	
-	if (argv[0][strlen(argv[0])-1] == '/')
-		argv[0][strlen(argv[0])-1] = '\0';
-	
-        processdir(argv[0]);
-	
-	exit(EXIT_SUCCESS);
+	return exit_code;
+}
+
+static int filename_cmp(const void *a, const void *b) {
+	struct imginfo *ia = (struct imginfo*)a;
+	struct imginfo *ib = (struct imginfo*)b;
+	return strcmp(ia->filename, ib->filename);
 }
 
 /*
@@ -263,6 +271,7 @@ processdir(char *dir)
 			    dent->d_name, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
+		/* TODO(pts): Do exponential reallocation. */
 		if ((imglist = realloc(imglist, (imgcount+1) *
 		    sizeof(struct imginfo))) == NULL) {
 			fprintf(stderr, "%s: can't realloc: %s\n", progname, 
@@ -279,7 +288,10 @@ processdir(char *dir)
 		    strerror(errno));
 		exit(EXIT_FAILURE);
 	}
-	
+
+	/* Put the images to increasing order for deterministic processing. */
+	qsort(imglist, imgcount, sizeof imglist[0], filename_cmp);
+
 	if (imgcount) {
 		create_images(dir, imglist, imgcount);
 		
