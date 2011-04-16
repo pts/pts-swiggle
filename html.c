@@ -51,7 +51,6 @@
 
 extern int	cols;
 extern int	rows;
-extern char	generated[];
 extern char	*albumdesc;
 extern char	*defaultdesc;
 extern char	*progname;
@@ -178,7 +177,7 @@ create_html(char *dir, struct imginfo *imglist, int imgcount)
 		}
 		
 		fprintf(html, "</td>\n</tr>\n</table>\n%s</body></html>",
-		    generated);
+		    "generated");
 		
 		if (fclose(html) == EOF) {
 			fprintf(stderr, "%s: can't fclose(%s): %s\n", progname,
@@ -310,7 +309,7 @@ create_thumbindex(char *dir, struct imginfo *imglist, int imgcount)
 		fprintf(html, "</table>\n<p align=\"center\">\n"
 		    "<a href=\"../index.html\">"
 		    "<small>Back to gallery index</small></a>\n</p>\n%s</body>"
-		    "\n</html>\n", generated);
+		    "\n</html>\n", "generated");
 		
 		if (fclose(html) == EOF) {
 			fprintf(stderr, "%s: can't fclose(%s): %s\n", progname,
