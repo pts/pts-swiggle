@@ -424,6 +424,11 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 		imglist[i].scaleheight = scaleheight;
 		imglist[i].scalewidth = (int)((double)imglist[i].scaleheight *
 		    ratio + 0.5);
+		/* TODO(pts): Fix too large width. */
+		if (!(imglist[i].scaleheight < imglist[i].height ||
+		      imglist[i].scalewidth < imglist[i].width))
+			continue;
+		    
 		imglist[i].thumbheight = thumbheight;
 		imglist[i].thumbwidth = (int)((double)imglist[i].thumbheight *
 		    ratio + 0.5);
