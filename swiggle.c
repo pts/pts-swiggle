@@ -400,6 +400,8 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 		if ((infile = fopen(ori, "rb")) == NULL) {
 			fprintf(stderr, "%s: can't fopen(%s): %s\n", progname,
 			    ori, strerror(errno));
+			fprintf(stderr, "ls -l /proc/%d/fd\n", getpid());
+			sleep(999);
 			exit(EXIT_FAILURE);
 		}
 		jpeg_create_decompress(&dinfo);
@@ -423,6 +425,8 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			imglist[i].aperture = get_exif_data(ed,
 			    EXIF_TAG_APERTURE_VALUE);
 			imglist[i].flash = get_exif_data(ed, EXIF_TAG_FLASH);
+			exif_data_free(ed);  /* Close ori. */
+			ed = NULL;
 		} else {
 			imglist[i].model = NULL;
 			imglist[i].datetime = NULL;
@@ -438,8 +442,10 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 		    ratio + 0.5);
 		/* TODO(pts): Fix too large width. */
 		if (!(imglist[i].scaleheight < imglist[i].height ||
-		      imglist[i].scalewidth < imglist[i].width))
+		      imglist[i].scalewidth < imglist[i].width)) {
+			fclose(infile);
 			continue;
+		}
 		    
 		imglist[i].thumbheight = thumbheight;
 		imglist[i].thumbwidth = (int)((double)imglist[i].thumbheight *
