@@ -45,7 +45,7 @@
 #include <jpeglib.h>
 #include <libexif/exif-data.h>
 
-#define	SWIGGLE_VERSION	"0.4"
+#define	SWIGGLE_VERSION	"0.4-pts"
 #define	SIZE_UCHAR	sizeof(unsigned char)
 
 struct imginfo {
@@ -70,9 +70,6 @@ struct imgdesc {
 	char	*filename;
 	char	*desc;
 };
-
-void	create_html(char *, struct imginfo *, int);
-int	create_thumbindex(char *, struct imginfo *, int);
 
 int resize_bicubic(struct jpeg_decompress_struct *,
     struct jpeg_compress_struct *, const unsigned char *, unsigned char **);

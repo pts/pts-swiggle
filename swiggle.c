@@ -74,7 +74,6 @@ int thumbheight = 96;
 int force = 0;
 int bilinear = 0;
 int rm_orphans = 1;
-int (*sort_func)();
 
 #define	MAX_PER_PAGE	(cols*rows)
 #define	EXIFSIZ		BUFSIZ
@@ -90,10 +89,6 @@ void	create_images(struct imginfo *, int);
 void	delete_image(struct imginfo *);
 void	delete_images(struct imginfo *, int);
 int	sort_by_filename(const void *, const void *);
-int	sort_by_filesize(const void *, const void *);
-int	sort_by_mtime(const void *, const void *);
-int	sort_by_exiftime(const void *, const void *);
-int	sort_dirs(const void *, const void *);
 char *	get_exif_data(ExifData *, ExifTag);
 void	usage(void);
 void	version(void);
@@ -132,7 +127,6 @@ main(int argc, char **argv)
 	struct stat sb;
 
 	progname = argv[0];
-	sort_func = sort_by_filename;
 
 	while ((i = getopt(argc, argv, "c:d:h:H:r:s:flov")) != -1) {
 		switch (i) {
@@ -171,18 +165,7 @@ main(int argc, char **argv)
 				usage();
 			}
 			break;
-		case 's':
-			if (strcmp(optarg, "name") == 0)
-				sort_func = sort_by_filename;
-			else if (strcmp(optarg, "size") == 0)
-				sort_func = sort_by_filesize;
-			else if (strcmp(optarg, "mtime") == 0)
-				sort_func = sort_by_mtime;
-			else {
-				fprintf(stderr, "%s: invalid argument '-s "
-				    "%s'\n", progname, optarg);
-				usage();
-			}
+		case 's':  /* Sorting, ignored. */
 			break;
 		case 'f':
 			force = 1;
@@ -311,14 +294,6 @@ void process_images(struct imginfo *imglist, int imgcount) {
 	/* Sort the list according to desired sorting function. */
 	qsort(imglist, imgcount, sizeof(struct imginfo), sort_by_filename);
 	create_images(imglist, imgcount);
-#if 0  /**** pts ****/
-	/* TODO(pts): Remove these, and sort_func? */
-	/* Sort the list according to desired sorting function. */
-	qsort(imglist, imgcount, sizeof(struct imginfo), sort_func);
-	create_html(dir, imglist, imgcount);
-	x = create_thumbindex(dir, imglist, imgcount);
-	printf("%d thumbnail index pages created.\n", x);
-#endif
 }
 
 /* TODO(pts): Remove exif support completely. */
@@ -660,17 +635,6 @@ sort_by_filesize(const void *a, const void *b)
 		return (1);
 	else
 		return (0);
-}
-
-int
-sort_dirs(const void *a, const void *b)
-{
-	const struct dirent *x, *y;
-
-	x = a;
-	y = b;
-
-	return (strcoll(x->d_name, y->d_name));
 }
 
 void
