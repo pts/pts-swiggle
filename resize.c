@@ -62,8 +62,8 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
     unsigned char **o)
 {
 	unsigned char *q, *x_vector;
-	int comp, i, next_col, next_row, num_rows;
-	int s_row_width, ty, t_row_width, x, y;
+	int comp, i, next_col, next_row;
+	unsigned s_row_width, ty, t_row_width, x, y, num_rows;
 	double factor, *s, *scanline, *scale_scanline;
 	double *t, x_scale, x_span, y_scale, y_span, *y_vector;
 	
@@ -205,8 +205,8 @@ resize_bilinear(struct jpeg_decompress_struct *dinfo,
     unsigned char **o)
 {
 	double factor, fraction_x, fraction_y, one_minus_x, one_minus_y;
-	int ceil_x, ceil_y, floor_x, floor_y, s_row_width;
-	int tcx, tcy, tfx, tfy, tx, ty, t_row_width, x, y;
+	unsigned ceil_x, ceil_y, floor_x, floor_y, s_row_width;
+	unsigned tcx, tcy, tfx, tfy, tx, ty, t_row_width, x, y;
 	unsigned char *q;
 	
 	/* RGB images have 3 components, grayscale images have only one. */
@@ -228,8 +228,8 @@ resize_bilinear(struct jpeg_decompress_struct *dinfo,
 	
 	for (y = 0; y < cinfo->image_height; y++) {
 		for (x = 0; x < cinfo->image_width; x++) {
-			floor_x = (int)(x * factor);
-			floor_y = (int)(y * factor);
+			floor_x = (unsigned)(x * factor);
+			floor_y = (unsigned)(y * factor);
 			ceil_x = (floor_x + 1 > cinfo->image_width)
 			    ? floor_x
 			    : floor_x + 1;
