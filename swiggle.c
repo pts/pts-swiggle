@@ -422,8 +422,6 @@ create_images(struct imginfo *imglist, int imgcount)
 		if ((infile = fopen(ori, "rb")) == NULL) {
 			fprintf(stderr, "%s: can't fopen(%s): %s\n", progname,
 			    ori, strerror(errno));
-			fprintf(stderr, "ls -l /proc/%d/fd\n", getpid());
-			sleep(999);
 			exit(EXIT_FAILURE);
 		}
 		jpeg_create_decompress(&dinfo);
