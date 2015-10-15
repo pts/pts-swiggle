@@ -40,26 +40,49 @@
 /* TODO(pts): Process directories recursively. */
 /* TODO(pts): Try all files as JPEG, don't die on JPEG read errors. */
 
-#include <sys/param.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/param.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
+
 #ifdef AIX
 #include <strings.h>
 #endif
-#include <time.h>
-#include <unistd.h>
 
 #include <jpeglib.h>
 #include <libexif/exif-data.h>
 
-#include "swiggle.h"
+#define	SWIGGLE_VERSION	"0.4-pts"
+
+struct imginfo {
+	char	*filename;
+	char	*description;
+	int	filesize;
+	time_t	mtime;
+	int	width;
+	int	height;
+	int	scalewidth;
+	int	scaleheight;
+	int	thumbwidth;
+	int	thumbheight;
+	char	*model;
+	char	*datetime;
+	char	*exposuretime;
+	char	*flash;
+	char	*aperture;
+};
+
+struct imgdesc {
+	char	*filename;
+	char	*desc;
+};
 
 /*
  * Global variables.
@@ -92,6 +115,10 @@ int	sort_by_filename(const void *, const void *);
 char *	get_exif_data(ExifData *, ExifTag);
 void	usage(void);
 void	version(void);
+int resize_bicubic(struct jpeg_decompress_struct *,
+    struct jpeg_compress_struct *, const unsigned char *, unsigned char **);
+int resize_bilinear(struct jpeg_decompress_struct *,
+    struct jpeg_compress_struct *, const unsigned char *, unsigned char **);
 
 static void check_alloc(const void *p) {
 	if (!p) {
@@ -473,7 +500,7 @@ create_images(struct imginfo *imglist, int imgcount)
 
 			jpeg_start_decompress(&dinfo);
 			row_width = dinfo.output_width * dinfo.num_components;
-			check_alloc(p = malloc(row_width * dinfo.output_height * SIZE_UCHAR));
+			check_alloc(p = malloc(row_width * dinfo.output_height * sizeof(unsigned char)));
 			samp = (*dinfo.mem->alloc_sarray)
 			    ((j_common_ptr)&dinfo, JPOOL_IMAGE, row_width, 1);
 
@@ -498,7 +525,7 @@ create_images(struct imginfo *imglist, int imgcount)
 			jpeg_set_defaults(&cinfo);
 			jpeg_set_quality(&cinfo, 50, FALSE);  /**** pts ****/
 
-			check_alloc(o = malloc(cinfo.image_width * cinfo.image_height * cinfo.input_components * SIZE_UCHAR));
+			check_alloc(o = malloc(cinfo.image_width * cinfo.image_height * cinfo.input_components * sizeof(unsigned char)));
 
 			/* Resize the image. */
 			if (resize_func(&dinfo, &cinfo, p, &o)) {
@@ -673,4 +700,228 @@ usage(void)
 	    defaultdesc);
 	fprintf(stderr, "   -v     ... show version info\n\n");
 	exit(EXIT_FAILURE);
+}
+
+/*
+ * Scales image (with pixels given in "p") according to the settings in
+ * "dinfo" (the source image) and "cinfo" (the target image) and stores
+ * the result in "o".
+ * Scaling is done with a bicubic algorithm (stolen from ImageMagick :-)).
+ */
+int
+resize_bicubic(struct jpeg_decompress_struct *dinfo,
+    struct jpeg_compress_struct *cinfo, const unsigned char *p,
+    unsigned char **o)
+{
+	unsigned char *q, *x_vector;
+	int comp, next_col, next_row;
+	unsigned s_row_width, ty, t_row_width, x, y, num_rows;
+	double factor, *s, *scanline, *scale_scanline;
+	double *t, x_scale, x_span, y_scale, y_span, *y_vector;
+
+	q = NULL;
+
+	/* RGB images have 3 components, grayscale images have only one. */
+	comp = dinfo->num_components;
+	s_row_width = dinfo->output_width * comp;
+	t_row_width = cinfo->image_width  * comp;
+	factor = (double)cinfo->image_width / (double)dinfo->output_width;
+
+	if ( *o == NULL )
+		return (-1);
+
+	/* No scaling needed. */
+	if (dinfo->output_width == cinfo->image_width) {
+		memcpy(*o, p, s_row_width * dinfo->output_height);
+		return (0);
+	}
+
+	x_vector = malloc(s_row_width * sizeof(unsigned char));
+	if (x_vector == NULL)
+		return (-1);
+	y_vector = malloc(s_row_width * sizeof(double));
+	if (y_vector == NULL)
+		return (-1);
+	scanline = malloc(s_row_width * sizeof(double));
+	if (scanline == NULL)
+		return (-1);
+	scale_scanline = malloc((t_row_width + comp) * sizeof(double));
+	if (scale_scanline == NULL)
+		return (-1);
+
+	num_rows = 0;
+	next_row = 1;
+	y_span = 1.0;
+	y_scale = factor;
+
+	for (y = 0; y < cinfo->image_height; y++) {
+		ty = y * t_row_width;
+		q = *o;
+
+		bzero(y_vector, s_row_width * sizeof(double));
+		bzero(scale_scanline, t_row_width * sizeof(double));
+
+		/* Scale Y-dimension. */
+		while (y_scale < y_span) {
+			if (next_row && num_rows < dinfo->output_height) {
+				/* Read a new scanline.  */
+				memcpy(x_vector, p, s_row_width);
+				p += s_row_width;
+				num_rows++;
+			}
+			for (x = 0; x < s_row_width; x++)
+				y_vector[x] += y_scale * (double)x_vector[x];
+			y_span  -= y_scale;
+			y_scale  = factor;
+			next_row = 1;
+		}
+		if (next_row && num_rows < dinfo->output_height) {
+			/* Read a new scanline.  */
+			memcpy(x_vector, p, s_row_width);
+			p += s_row_width;
+			num_rows++;
+			next_row = 0;
+		}
+		s = scanline;
+		for (x = 0; x < s_row_width; x++) {
+			y_vector[x] += y_span * (double) x_vector[x];
+			*s = y_vector[x];
+			s++;
+		}
+		y_scale -= y_span;
+		if (y_scale <= 0) {
+			y_scale  = factor;
+			next_row = 1;
+		}
+		y_span = 1.0;
+
+		next_col = 0;
+		x_span   = 1.0;
+		s = scanline;
+		t = scale_scanline;
+
+		/* Scale X dimension. */
+		for (x = 0; x < dinfo->output_width; x++) {
+			x_scale = factor;
+			while (x_scale >= x_span) {
+				if (next_col)
+					t += comp;
+				t[0] += x_span * s[0];
+				if (comp != 1) {
+					t[1] += x_span * s[1];
+					t[2] += x_span * s[2];
+				}
+				x_scale -= x_span;
+				x_span   = 1.0;
+				next_col = 1;
+			}
+			if (x_scale > 0) {
+				if (next_col) {
+					next_col = 0;
+					t += comp;
+				}
+				t[0] += x_scale * s[0];
+				if (comp != 1) {
+					t[1] += x_scale * s[1];
+					t[2] += x_scale * s[2];
+				}
+				x_span -= x_scale;
+			}
+			s += comp;
+		}
+
+		/* Copy scanline to target. */
+		t = scale_scanline;
+		for (x = 0; x < t_row_width; x++)
+			q[ty+x] = (unsigned char)t[x];
+	}
+
+	free(x_vector);
+	free(y_vector);
+	free(scanline);
+	free(scale_scanline);
+
+	return (0);
+}
+
+/*
+ * Scales image (with pixels given in "p") according to the settings in
+ * "dinfo" (the source image) and "cinfo" (the target image) and stores
+ * the result in "o".
+ * Scaling is done with a bilinear algorithm.
+ */
+int
+resize_bilinear(struct jpeg_decompress_struct *dinfo,
+    struct jpeg_compress_struct *cinfo, const unsigned char *p,
+    unsigned char **o)
+{
+	double factor, fraction_x, fraction_y, one_minus_x, one_minus_y;
+	unsigned ceil_x, ceil_y, floor_x, floor_y, s_row_width;
+	unsigned tcx, tcy, tfx, tfy, tx, ty, t_row_width, x, y;
+	unsigned char *q;
+
+	/* RGB images have 3 components, grayscale images have only one. */
+	s_row_width = dinfo->num_components * dinfo->output_width;
+	t_row_width = dinfo->num_components * cinfo->image_width;
+
+	factor = (double)dinfo->output_width / (double)cinfo->image_width;
+
+	if (*o == NULL)
+		return (-1);
+
+	/* No scaling needed. */
+	if (dinfo->output_width == cinfo->image_width) {
+		memcpy(*o, p, s_row_width * dinfo->output_height);
+		return (0);
+	}
+
+	q = *o;
+
+	for (y = 0; y < cinfo->image_height; y++) {
+		for (x = 0; x < cinfo->image_width; x++) {
+			floor_x = (unsigned)(x * factor);
+			floor_y = (unsigned)(y * factor);
+			ceil_x = (floor_x + 1 > cinfo->image_width)
+			    ? floor_x
+			    : floor_x + 1;
+			ceil_y = (floor_y + 1 > cinfo->image_height)
+			    ? floor_y
+			    : floor_y + 1;
+			fraction_x = (x * factor) - floor_x;
+			fraction_y = (y * factor) - floor_y;
+			one_minus_x = 1.0 - fraction_x;
+			one_minus_y = 1.0 - fraction_y;
+
+			tx  = x * dinfo->num_components;
+			ty  = y * t_row_width;
+			tfx = floor_x * dinfo->num_components;
+			tfy = floor_y * s_row_width;
+			tcx = ceil_x * dinfo->num_components;
+			tcy = ceil_y * s_row_width;
+
+			q[tx + ty] = one_minus_y *
+			    (one_minus_x * p[tfx + tfy] +
+			    fraction_x * p[tcx + tfy]) +
+			    fraction_y * (one_minus_x * p[tfx + tcy] +
+			    fraction_x  * p[tcx + tcy]);
+
+			if (dinfo->num_components != 1) {
+				q[tx + ty + 1] = one_minus_y *
+				    (one_minus_x * p[tfx + tfy + 1] +
+				    fraction_x * p[tcx + tfy + 1]) +
+				    fraction_y * (one_minus_x *
+				    p[tfx + tcy + 1] + fraction_x *
+				    p[tcx + tcy + 1]);
+
+				q[tx + ty + 2] = one_minus_y *
+				    (one_minus_x * p[tfx + tfy + 2] +
+				    fraction_x * p[tcx + tfy + 2]) +
+				    fraction_y * (one_minus_x *
+				    p[tfx + tcy + 2] + fraction_x *
+				    p[tcx + tcy + 2]);
+			}
+		}
+	}
+
+	return (0);
 }
