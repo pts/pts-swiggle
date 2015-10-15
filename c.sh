@@ -4,6 +4,9 @@
 # Dependencies on Ubuntu Trusty:
 #   sudo apt-get install gcc libc6-dev libexif-dev libjpeg8-dev
 set -ex
-gcc -s -O3 -W -Wall -ljpeg -lexif -o swiggle swiggle.c resize.c html.c
+gcc -s -O3 -W -Wall -Wextra -Werror \
+    -ljpeg -lexif \
+    -o swiggle \
+    swiggle.c resize.c html.c
 ls -l swiggle
 
