@@ -5,9 +5,9 @@
 #   sudo apt-get install gcc libc6-dev libexif-dev libjpeg8-dev
 set -ex
 gcc -s -O3 -W -Wall -Wextra -Werror \
-    -o swiggle \
+    -o pts-swiggle \
     swiggle.c resize.c html.c \
     -ljpeg -lexif \
 ;
-ls -l swiggle
+ls -l pts-swiggle
 

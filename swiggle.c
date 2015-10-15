@@ -808,7 +808,7 @@ void
 usage(void)
 {
 	fprintf(stderr, "\nUsage:\n");
-	fprintf(stderr, "swiggle [options] /path/to/gallery\n\n");
+	fprintf(stderr, "pts-swiggle [options] /path/to/gallery\n\n");
 	fprintf(stderr, "Available options:\n");
 	fprintf(stderr, "   -c <x> ... columns per thumbnail index page "
 	    "(default: %d)\n", cols);

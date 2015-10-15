@@ -1,3 +1,18 @@
+pts-swiggle is a fast, command-line JPEG thumbnail generator: it reads JPEG
+images and generates the corresponding smaller (thumbnail) images. It
+needs libjpeg and libexif.
+
+To compile, install libjpeg (v62 and v8 do work) and libexif, and run the
+shell script ./c.sh on Unix.
+
+Example usage to generate thumbnails of at most 768 pixels high:
+
+  pts-swiggle -H 768 .  
+
+pts-swiggle is written in C, and its source code is based on swiggle
+(http://homepage.univie.ac.at/l.ertl/swiggle/).
+README of the original swiggle-0.4:
+
 -------------------------------------------------
 swiggle - le's simple web image gallery generator
 -------------------------------------------------
