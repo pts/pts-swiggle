@@ -1,5 +1,6 @@
 /*
- * swiggle - le's simple web image gallery generator
+ * pts-swiggle: fast, command-line JPEG thumbnail generator
+ * swiggle: le's simple web image gallery generator
  *
  * Copyright (c) 2003, 2004, 2006
  *  Lukas Ertl <l.ertl@univie.ac.at>.  All rights reserved.
@@ -84,14 +85,13 @@ struct imgdesc {
 	char	*desc;
 };
 
-/*
- * Global variables.
- */
-static char *progname = "";  /* TODO(pts): Remove. */
-static int scaleheight = 480;
-static int thumbheight = 96;
-static int force = 0;
-static int bilinear = 0;
+static struct {
+	char *progname;
+	int scaleheight;
+	int thumbheight;
+	int force;
+	int bilinear;
+} g_flags = { "", 480, 96, 0, 0 };
 
 /*
  * Function declarations.
@@ -135,7 +135,7 @@ main(int argc, char **argv)
 	int exit_code;
 	struct stat sb;
 
-	progname = argv[0];
+	g_flags.progname = argv[0];
 
 	while ((i = getopt(argc, argv, "c:d:h:H:r:s:flov")) != -1) {
 		switch (i) {
@@ -144,18 +144,18 @@ main(int argc, char **argv)
 		case 'd':  /* defaultdesc, ignored */
 			break;
 		case 'h':
-			thumbheight = (int) strtol(optarg, &eptr, 10);
+			g_flags.thumbheight = (int) strtol(optarg, &eptr, 10);
 			if (eptr == optarg || *eptr != '\0') {
 				fprintf(stderr, "%s: invalid argument '-h "
-				    "%s'\n", progname, optarg);
+				    "%s'\n", g_flags.progname, optarg);
 				usage();
 			}
 			break;
 		case 'H':
-			scaleheight = (int) strtol(optarg, &eptr, 10);
+			g_flags.scaleheight = (int) strtol(optarg, &eptr, 10);
 			if (eptr == optarg || *eptr != '\0') {
 				fprintf(stderr, "%s: invalid argument '-H "
-				    "%s'\n", progname, optarg);
+				    "%s'\n", g_flags.progname, optarg);
 				usage();
 			}
 			break;
@@ -164,10 +164,10 @@ main(int argc, char **argv)
 		case 's':  /* Sorting, ignored. */
 			break;
 		case 'f':
-			force = 1;
+			g_flags.force = 1;
 			break;
 		case 'l':
-			bilinear = 1;
+			g_flags.bilinear = 1;
 			break;
 		case 'o':  /* rm_orphans, ignored. */
 			break;
@@ -193,7 +193,7 @@ main(int argc, char **argv)
 
 	for (i = 0; i < argc; ++i) {
 		if (stat(argv[i], &sb)) {
-			fprintf(stderr, "%s: can't stat(%s): %s\n", progname, argv[i],
+			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname, argv[i],
 			    strerror(errno));
 			exit_code = EXIT_FAILURE;
 			continue;
@@ -211,7 +211,7 @@ main(int argc, char **argv)
 			process_images(&img, 1);
 			delete_image(&img);
 		} else {
-			fprintf(stderr, "%s: not a file or directory: %s\n", progname,
+			fprintf(stderr, "%s: not a file or directory: %s\n", g_flags.progname,
 			    argv[i]);
 			exit_code = EXIT_FAILURE;
 		}
@@ -241,7 +241,7 @@ static void process_dir(char *dir) {
 
 
 	if ((thisdir = opendir(dir)) == NULL) {
-		fprintf(stderr, "%s: can't opendir(%s): %s\n", progname, dir,
+		fprintf(stderr, "%s: can't opendir(%s): %s\n", g_flags.progname, dir,
 		    strerror(errno));
 		exit(EXIT_FAILURE);
 	}
@@ -275,7 +275,7 @@ static void process_dir(char *dir) {
 	}
 
 	if (closedir(thisdir)) {
-		fprintf(stderr, "%s: error on closedir(%s): %s", progname, dir,
+		fprintf(stderr, "%s: error on closedir(%s): %s", g_flags.progname, dir,
 		    strerror(errno));
 		exit(EXIT_FAILURE);
 	}
@@ -333,7 +333,7 @@ create_images(struct imginfo *imglist, int imgcount)
 	dinfo.err = jpeg_std_error(&jerr);
 	cinfo.err = jpeg_std_error(&jerr);
 
-	if (bilinear)
+	if (g_flags.bilinear)
 		resize_func = resize_bilinear;
 	else
 		resize_func = resize_bicubic;
@@ -346,7 +346,7 @@ create_images(struct imginfo *imglist, int imgcount)
 		printf("Image %s\n", ori);
 
 		if (stat(ori, &sb)) {
-			fprintf(stderr, "%s: can't stat(%s): %s\n", progname,
+			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
 			    ori, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
@@ -371,13 +371,13 @@ create_images(struct imginfo *imglist, int imgcount)
 		 * Check if the cached image exists and is newer than the
 		 * original.
 		 */
-		cached = !force && check_cache(final, &sb);
+		cached = !g_flags.force && check_cache(final, &sb);
 
 		/*
 		 * Open the file and get some basic image information.
 		 */
 		if ((infile = fopen(ori, "rb")) == NULL) {
-			fprintf(stderr, "%s: can't fopen(%s): %s\n", progname,
+			fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname,
 			    ori, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
@@ -394,7 +394,7 @@ create_images(struct imginfo *imglist, int imgcount)
 
 		/* ratio needed to scale image correctly. */
 		ratio = ((double)imglist[i].width / (double)imglist[i].height);
-		imglist[i].scaleheight = scaleheight;
+		imglist[i].scaleheight = g_flags.scaleheight;
 		imglist[i].scalewidth = (int)((double)imglist[i].scaleheight *
 		    ratio + 0.5);
 		/* TODO(pts): Fix too large width. */
@@ -405,7 +405,7 @@ create_images(struct imginfo *imglist, int imgcount)
 			continue;
 		}
 
-		imglist[i].thumbheight = thumbheight;
+		imglist[i].thumbheight = g_flags.thumbheight;
 		imglist[i].thumbwidth = (int)((double)imglist[i].thumbheight *
 		    ratio + 0.5);
 
@@ -417,7 +417,7 @@ create_images(struct imginfo *imglist, int imgcount)
 			sprintf(tmp, "%s.tmp", final);
 			if ((outfile = fopen(tmp, "wb")) == NULL) {
 				fprintf(stderr, "%s: can't fopen(%s): %s\n",
-				    progname, tmp, strerror(errno));
+				    g_flags.progname, tmp, strerror(errno));
 				exit(EXIT_FAILURE);
 			}
 
@@ -466,7 +466,7 @@ create_images(struct imginfo *imglist, int imgcount)
 			/* Resize the image. */
 			if (resize_func(&dinfo, &cinfo, p, &o)) {
 				fprintf(stderr, "%s: can't resize image '%s': "
-				    "%s\n", progname, ori, strerror(errno));
+				    "%s\n", g_flags.progname, ori, strerror(errno));
 				exit(EXIT_FAILURE);
 			}
 
@@ -484,7 +484,7 @@ create_images(struct imginfo *imglist, int imgcount)
 
 			if (rename(tmp, final)) {
 				fprintf(stderr, "%s: can't rename(%s, %s): "
-				    "%s\n", progname, tmp, final,
+				    "%s\n", g_flags.progname, tmp, final,
 				    strerror(errno));
 				exit(EXIT_FAILURE);
 			}
@@ -517,7 +517,7 @@ check_cache(char *filename, struct stat *sb_ori)
 
 	if (stat(filename, &sb)) {
 		if (errno != ENOENT) {
-			fprintf(stderr, "%s: can't stat(%s): %s\n", progname,
+			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
 			    filename, strerror(errno));
 			exit(EXIT_FAILURE);
 		} else {
@@ -557,9 +557,9 @@ usage(void)
 	fprintf(stderr, "   -c <x> ... columns per thumbnail index page\n");
 	fprintf(stderr, "   -r <y> ... rows per thumbnail index page\n");
 	fprintf(stderr, "   -h <i> ... height of the thumbnails in pixel "
-	    "(default: %d)\n", thumbheight);
+	    "(default: %d)\n", g_flags.thumbheight);
 	fprintf(stderr, "   -H <j> ... height of the scaled images in pixel "
-	    "(default: %d)\n", scaleheight);
+	    "(default: %d)\n", g_flags.scaleheight);
 	fprintf(stderr, "   -f     ... force rebuild of everything; ignore "
 	    "cache\n");
 	fprintf(stderr, "   -o     ... don't remove orphaned files\n");
