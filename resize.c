@@ -62,7 +62,7 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
     unsigned char **o)
 {
 	unsigned char *q, *x_vector;
-	int comp, i, next_col, next_row;
+	int comp, next_col, next_row;
 	unsigned s_row_width, ty, t_row_width, x, y, num_rows;
 	double factor, *s, *scanline, *scale_scanline;
 	double *t, x_scale, x_span, y_scale, y_span, *y_vector;
@@ -101,7 +101,6 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
 	next_row = 1;
 	y_span = 1.0;
 	y_scale = factor;
-	i = 0;
 	
 	for (y = 0; y < cinfo->image_height; y++) {
 		ty = y * t_row_width;
