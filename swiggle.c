@@ -37,6 +37,9 @@
  *
  */
 
+/* TODO(pts): Process directories recursively. */
+/* TODO(pts): Try all files as JPEG, don't die on JPEG read errors. */
+
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -82,7 +85,7 @@ int (*sort_func)();
 int	processdir(char *);
 int	check_cache(char *, struct stat *);
 void	create_cache_dirs(char *);
-void	create_images(char *, struct imginfo *, int);
+void	create_images(struct imginfo *, int);
 void	delete_image(struct imginfo *);
 void	delete_images(struct imginfo *, int);
 int	sort_by_filename(const void *, const void *);
@@ -90,8 +93,6 @@ int	sort_by_filesize(const void *, const void *);
 int	sort_by_mtime(const void *, const void *);
 int	sort_by_exiftime(const void *, const void *);
 int	sort_dirs(const void *, const void *);
-int	read_img_desc(char *, struct imgdesc **);
-char *	get_img_desc(struct imgdesc *, int, char *);
 char *	get_exif_data(ExifData *, ExifTag);
 void	usage(void);
 void	version(void);
@@ -240,6 +241,7 @@ processdir(char *dir)
 {
 	char *i, *p;
 	int imgcount;
+	unsigned dir_size;
 	struct dirent *dent;
 	struct imginfo *imglist, *img;
 #ifdef NO_D_TYPE
@@ -257,6 +259,7 @@ processdir(char *dir)
 		exit(EXIT_FAILURE);
 	}
 
+	dir_size = strlen(dir);
 	while ((dent = readdir(thisdir)) != NULL) {
         /* We only want regular files that have a filename suffix. */
 #ifdef NO_D_TYPE
@@ -277,7 +280,8 @@ processdir(char *dir)
 
 		/* Allocate memory for this image and store it in the list. */
 		
-		check_alloc(i = strdup(dent->d_name));
+		check_alloc(i = malloc(dir_size + strlen(dent->d_name) + 2));
+		sprintf(i, "%s/%s", dir, dent->d_name);
 		/* TODO(pts): Do exponential reallocation. */
 		check_alloc(imglist = realloc(imglist, (imgcount + 1) * sizeof(struct imginfo)));
 		img = &imglist[imgcount++];
@@ -301,7 +305,7 @@ processdir(char *dir)
 	qsort(imglist, imgcount, sizeof imglist[0], filename_cmp);
 
 	if (imgcount) {
-		create_images(dir, imglist, imgcount);
+		create_images(imglist, imgcount);
 
 		/* Sort the list according to desired sorting function. */
 		qsort(imglist, imgcount, sizeof(struct imginfo), sort_func);
@@ -347,12 +351,12 @@ void delete_images(struct imginfo *imglist, int imgcount) {
  * Also fills in various image information into each member of "imglist".
  */
 void
-create_images(char *dir, struct imginfo *imglist, int imgcount)
+create_images(struct imginfo *imglist, int imgcount)
 {
-	char final[MAXPATHLEN], tmp[MAXPATHLEN], ori[MAXPATHLEN];
+	char final[MAXPATHLEN], tmp[MAXPATHLEN], *ori;
 	double factor, ratio;
 	FILE *infile, *outfile;
-	int cached, i, idcount, n, ori_in_mem, row_width;
+	int cached, i, n, ori_in_mem, row_width;
 	int (*resize_func) ();
 	struct imgdesc *id;
 	struct stat sb;
@@ -369,8 +373,6 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 	dinfo.err = jpeg_std_error(&jerr);
 	cinfo.err = jpeg_std_error(&jerr);
 
-	idcount = read_img_desc(dir, &id);
-
 	if (bilinear)
 		resize_func = resize_bilinear;
 	else
@@ -379,8 +381,8 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 	for (i = 0; i < imgcount; i++) {
 		p = o = NULL;
 		ori_in_mem = 0;
+		ori = imglist[i].filename;
 
-		sprintf(ori, "%s/%s", dir, imglist[i].filename);
 		printf("Image %s\n", ori);
 
 		if (stat(ori, &sb)) {
@@ -389,10 +391,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			exit(EXIT_FAILURE);
 		}
 
-#if 0  /**** pts ****/
-		sprintf(final, "%s/.scaled/%s", dir, imglist[i].filename);
-#else
-		{
+		{  /* Generate thumbnail filename. */
 			const char* r = ori + strlen(ori);
 			const char* p = r;
 			size_t prefixlen;
@@ -407,7 +406,6 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			memcpy(final, ori, prefixlen);
 			strcpy(final + prefixlen, ".th.jpg");
 		}
-#endif
 
 		/*
 		 * Check if the cached image exists and is newer than the
@@ -433,14 +431,13 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 		}
 		jpeg_create_decompress(&dinfo);
 		jpeg_stdio_src(&dinfo, infile);
-		(void)jpeg_read_header(&dinfo, FALSE);  /* !! don't abort the program on failure */
+		(void)jpeg_read_header(&dinfo, FALSE);  /* TODO(pts): don't abort the program on failure */
 
 		imglist[i].filesize = sb.st_size;
 		imglist[i].mtime = sb.st_mtime;
 		imglist[i].width = dinfo.image_width;
 		imglist[i].height = dinfo.image_height;
-		imglist[i].description = get_img_desc(id, idcount,
-		    imglist[i].filename);
+		imglist[i].description = NULL;  /* TODO(pts): Remove this field. */
 
 		/* Get the EXIF information from the file. */
 		if ((ed = exif_data_new_from_file(ori)) != NULL) {
@@ -536,8 +533,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			/* Resize the image. */
 			if (resize_func(&dinfo, &cinfo, p, &o)) {
 				fprintf(stderr, "%s: can't resize image '%s': "
-				    "%s\n", progname, imglist[i].filename,
-				    strerror(errno));
+				    "%s\n", progname, ori, strerror(errno));
 				exit(EXIT_FAILURE);
 			}
 
@@ -601,90 +597,6 @@ check_cache(char *filename, struct stat *sb_ori)
 		cached = 0;
 
 	return (cached);
-}
-
-/*
- * Reads in the description file, if present in given directory "dir",
- * and fills a list of image descriptions, pointed to by "id".
- * Returns the count of found descriptions.
- */
-int
-read_img_desc(char *dir, struct imgdesc **id)
-{
-	char buf[1024], *d, *f, *p, path[MAXPATHLEN], *w;
-	int n;
-	struct imgdesc *i;
-	FILE *desc;
-
-	n = 0;
-
-	/* Reset the description for the current album. */
-	albumdesc = NULL;
-	i = NULL;
-
-	sprintf(path, "%s/.description", dir);
-
-	desc = fopen(path, "r");
-
-	if (desc == NULL) {
-		*id = i;
-		return (0);
-	}
-
-	while (fgets(buf, sizeof(buf), desc) != NULL) {
-		w = buf;
-		if ((p = strsep(&w, " \t")) == NULL)
-			continue;
-		if (w == NULL)
-			continue;
-
-		if (w[strlen(w)-1] == '\n')
-			w[strlen(w)-1] = '\0';
-
-		while (isspace(*w))
-			w++;
-
-		check_alloc(d = strdup(w));
-
-		/* We have found the album description. */
-		if (strcmp(p, ".") == 0) {
-			albumdesc = d;
-			continue;
-		}
-
-		check_alloc(f = strdup(p));
-
-		/* TODO(pts): Do exponential reallocation. */
-		check_alloc(i = realloc(i, (n + 1) * sizeof(struct imgdesc)));
-		i[n].filename = f;
-		i[n].desc = d;
-
-		n++;
-	}
-
-	*id = i;
-	return (n);
-}
-
-/*
- * Returns the image description for "filename" in the list pointed to
- * by "id". Returns the given filename if the description isn't found.
- */
-char *
-get_img_desc(struct imgdesc *id, int idcount, char *filename)
-{
-	int i;
-
-	if (id != NULL) {
-		for (i = 0; i < idcount; i++) {
-			if (strcmp(id[i].filename, filename) == 0) {
-				filename = id[i].desc;
-				break;
-			}
-		}
-	}
-	check_alloc(filename = strdup(filename));
-	return filename;
 }
 
 /*
