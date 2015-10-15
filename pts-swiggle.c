@@ -390,8 +390,6 @@ create_images(struct imginfo *imglist, int imgcount)
 		imglist[i].width = dinfo.image_width;
 		imglist[i].height = dinfo.image_height;
 
-		/* !! */
-
 		/* ratio needed to scale image correctly. */
 		ratio = ((double)imglist[i].width / (double)imglist[i].height);
 		imglist[i].scaleheight = g_flags.scaleheight;
