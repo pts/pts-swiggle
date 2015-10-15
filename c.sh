@@ -6,7 +6,7 @@
 set -ex
 gcc -s -O3 -W -Wall -Wextra -Werror \
     -o pts-swiggle \
-    swiggle.c \
+    pts-swiggle.c \
     -ljpeg \
 ;
 ls -l pts-swiggle
