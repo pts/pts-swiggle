@@ -39,6 +39,12 @@
 
 /* TODO(pts): Process directories recursively. */
 /* TODO(pts): Try all files as JPEG, don't die on JPEG read errors. */
+/* TODO(pts): Remove unused command-line flags and their help. */
+
+/* Configuration */
+#if __linux
+#define HAVE_D_TYPE 1
+#endif
 
 #include <ctype.h>
 #include <dirent.h>
@@ -57,13 +63,12 @@
 #endif
 
 #include <jpeglib.h>
-#include <libexif/exif-data.h>
 
 #define	SWIGGLE_VERSION	"0.4-pts"
 
+/* TODO(pts): Remove unused fields. */
 struct imginfo {
 	char	*filename;
-	char	*description;
 	int	filesize;
 	time_t	mtime;
 	int	width;
@@ -72,11 +77,6 @@ struct imginfo {
 	int	scaleheight;
 	int	thumbwidth;
 	int	thumbheight;
-	char	*model;
-	char	*datetime;
-	char	*exposuretime;
-	char	*flash;
-	char	*aperture;
 };
 
 struct imgdesc {
@@ -87,19 +87,11 @@ struct imgdesc {
 /*
  * Global variables.
  */
-static char *albumdesc = "";
-static char *defaultdesc = "my webgallery";
-static char *progname = "";
-static int cols = 5;
-static int rows = 3;
+static char *progname = "";  /* TODO(pts): Remove. */
 static int scaleheight = 480;
 static int thumbheight = 96;
 static int force = 0;
 static int bilinear = 0;
-static int rm_orphans = 1;
-
-#define	MAX_PER_PAGE	(cols*rows)
-#define	EXIFSIZ		BUFSIZ
 
 /*
  * Function declarations.
@@ -111,7 +103,6 @@ static void create_images(struct imginfo *, int);
 static void delete_image(struct imginfo *);
 static void delete_images(struct imginfo *, int);
 static int sort_by_filename(const void *, const void *);
-static char *get_exif_data(ExifData *, ExifTag);
 static void usage(void);
 static void version(void);
 static int resize_bicubic(struct jpeg_decompress_struct *,
@@ -128,15 +119,7 @@ static void check_alloc(const void *p) {
 }
 
 static void create_image(char *filename_take, struct imginfo *img) {
-	/* TODO(pts): Do exponential reallocation. */
 	img->filename = filename_take;
-	/* TODO(pts): Why are these needed? */
-	img->description = NULL;
-	img->model = NULL;
-	img->datetime = NULL;
-	img->exposuretime = NULL;
-	img->flash = NULL;
-	img->aperture = NULL;
 }
 
 /*
@@ -156,20 +139,13 @@ main(int argc, char **argv)
 
 	while ((i = getopt(argc, argv, "c:d:h:H:r:s:flov")) != -1) {
 		switch (i) {
-		case 'c':
-			cols = (int) strtol(optarg, &eptr, 10);
-			if (eptr == optarg || *eptr != '\0' || cols < 1) {
-				fprintf(stderr, "%s: invalid argument '-c "
-				    "%s'\n", progname, optarg);
-				usage();
-			}
+		case 'c':  /* cols, ignored */
 			break;
-		case 'd':
-			defaultdesc = optarg;
+		case 'd':  /* defaultdesc, ignored */
 			break;
 		case 'h':
 			thumbheight = (int) strtol(optarg, &eptr, 10);
-			if (eptr == optarg || *eptr != '\0' || cols < 1) {
+			if (eptr == optarg || *eptr != '\0') {
 				fprintf(stderr, "%s: invalid argument '-h "
 				    "%s'\n", progname, optarg);
 				usage();
@@ -177,19 +153,13 @@ main(int argc, char **argv)
 			break;
 		case 'H':
 			scaleheight = (int) strtol(optarg, &eptr, 10);
-			if (eptr == optarg || *eptr != '\0' || cols < 1) {
+			if (eptr == optarg || *eptr != '\0') {
 				fprintf(stderr, "%s: invalid argument '-H "
 				    "%s'\n", progname, optarg);
 				usage();
 			}
 			break;
-		case 'r':
-			rows = (int) strtol(optarg, &eptr, 10);
-			if (eptr == optarg || *eptr != '\0' || rows < 1) {
-				fprintf(stderr, "%s: invalid argument '-r "
-				    "%s'\n", progname, optarg);
-				usage();
-			}
+		case 'r':  /* rows, ignored */
 			break;
 		case 's':  /* Sorting, ignored. */
 			break;
@@ -199,8 +169,7 @@ main(int argc, char **argv)
 		case 'l':
 			bilinear = 1;
 			break;
-		case 'o':
-			rm_orphans = 0;
+		case 'o':  /* rm_orphans, ignored. */
 			break;
 		case 'v':
 			version();
@@ -242,7 +211,7 @@ main(int argc, char **argv)
 			process_images(&img, 1);
 			delete_image(&img);
 		} else {
-			fprintf(stderr, "%s: '%s' is not a file or directory\n", progname,
+			fprintf(stderr, "%s: not a file or directory: %s\n", progname,
 			    argv[i]);
 			exit_code = EXIT_FAILURE;
 		}
@@ -264,7 +233,7 @@ static void process_dir(char *dir) {
 	char *i, *p;
 	unsigned dir_size;
 	struct dirent *dent;
-#ifdef NO_D_TYPE
+#ifndef HAVE_D_TYPE
 	char buf[MAXPATHLEN];
 	struct stat sb;
 #endif
@@ -282,7 +251,7 @@ static void process_dir(char *dir) {
 	imgcount = 0;
 	while ((dent = readdir(thisdir)) != NULL) {
         /* We only want regular files that have a filename suffix. */
-#ifdef NO_D_TYPE
+#ifndef HAVE_D_TYPE  /* TODO(pts): Do all filesystems support it? */
 		sprintf(buf, "%s/%s", dir, dent->d_name);
 		if ((stat(buf, &sb) == 0 && !S_ISREG(sb.st_mode)) ||
 		    ((p = strrchr(dent->d_name, '.')) == NULL))
@@ -300,6 +269,7 @@ static void process_dir(char *dir) {
 
 		check_alloc(i = malloc(dir_size + strlen(dent->d_name) + 2));
 		sprintf(i, "%s/%s", dir, dent->d_name);
+		/* TODO(pts): Do exponential reallocation. */
 		check_alloc(imglist = realloc(imglist, (imgcount + 1) * sizeof(struct imginfo)));
 		create_image(i, &imglist[imgcount++]);
 	}
@@ -311,8 +281,8 @@ static void process_dir(char *dir) {
 	}
 	process_images(imglist, imgcount);
 	delete_images(imglist, imgcount);
-	printf("%d image%s processed in album '%s'.\n", imgcount,
-	    imgcount != 1 ? "s" : "", albumdesc != NULL ? albumdesc : dir);
+	printf("%d image%s processed in dir: %s\n", imgcount,
+	    imgcount != 1 ? "s" : "", dir);
 }
 
 static void process_images(struct imginfo *imglist, int imgcount) {
@@ -322,15 +292,8 @@ static void process_images(struct imginfo *imglist, int imgcount) {
 	create_images(imglist, imgcount);
 }
 
-/* TODO(pts): Remove exif support completely. */
 static void delete_image(struct imginfo *img) {
 	free(img->filename); img->filename = NULL;
-	free(img->description); img->description = NULL;
-	free(img->model); img->model = NULL;
-	free(img->datetime); img->datetime = NULL;
-	free(img->exposuretime); img->exposuretime = NULL;
-	free(img->flash); img->flash = NULL;
-	free(img->aperture); img->aperture = NULL;
 }
 
 static void delete_images(struct imginfo *imglist, int imgcount) {
@@ -362,7 +325,6 @@ create_images(struct imginfo *imglist, int imgcount)
 	struct jpeg_compress_struct cinfo;
 	struct jpeg_error_mgr jerr;
 	unsigned char *o, *p;
-	ExifData *ed;
 	JSAMPARRAY samp;
 	JSAMPROW row_pointer[1];
 
@@ -409,16 +371,10 @@ create_images(struct imginfo *imglist, int imgcount)
 		 * Check if the cached image exists and is newer than the
 		 * original.
 		 */
-		if (force)
-			cached = 0;
-		else
-			cached = check_cache(final, &sb);
+		cached = !force && check_cache(final, &sb);
 
 		/*
 		 * Open the file and get some basic image information.
-		 * We use width and height from the JPEG header and not
-		 * from the EXIF data, since it's possible that the EXIF
-		 * data isn't correct.
 		 */
 		if ((infile = fopen(ori, "rb")) == NULL) {
 			fprintf(stderr, "%s: can't fopen(%s): %s\n", progname,
@@ -433,27 +389,8 @@ create_images(struct imginfo *imglist, int imgcount)
 		imglist[i].mtime = sb.st_mtime;
 		imglist[i].width = dinfo.image_width;
 		imglist[i].height = dinfo.image_height;
-		imglist[i].description = NULL;  /* TODO(pts): Remove this field. */
 
-		/* Get the EXIF information from the file. */
-		if ((ed = exif_data_new_from_file(ori)) != NULL) {
-			imglist[i].model = get_exif_data(ed, EXIF_TAG_MODEL);
-			imglist[i].datetime = get_exif_data(ed,
-			    EXIF_TAG_DATE_TIME_ORIGINAL);
-			imglist[i].exposuretime = get_exif_data(ed,
-			    EXIF_TAG_EXPOSURE_TIME);
-			imglist[i].aperture = get_exif_data(ed,
-			    EXIF_TAG_APERTURE_VALUE);
-			imglist[i].flash = get_exif_data(ed, EXIF_TAG_FLASH);
-			exif_data_free(ed);  /* Close ori. */
-			ed = NULL;
-		} else {
-			imglist[i].model = NULL;
-			imglist[i].datetime = NULL;
-			imglist[i].exposuretime = NULL;
-			imglist[i].aperture = NULL;
-			imglist[i].flash = NULL;
-		}
+		/* !! */
 
 		/* ratio needed to scale image correctly. */
 		ratio = ((double)imglist[i].width / (double)imglist[i].height);
@@ -476,7 +413,7 @@ create_images(struct imginfo *imglist, int imgcount)
 		 * If the image is not cached, we need to read it in,
 		 * resize it, and write it out.
 		 */
-		if (cached == 0) {
+		if (!cached) {
 			sprintf(tmp, "%s.tmp", final);
 			if ((outfile = fopen(tmp, "wb")) == NULL) {
 				fprintf(stderr, "%s: can't fopen(%s): %s\n",
@@ -564,9 +501,6 @@ create_images(struct imginfo *imglist, int imgcount)
 			free(o);
 			free(p);
 		}
-
-		if (ed != NULL)
-			exif_data_free(ed);
 	}
 
 	if (id != NULL)
@@ -596,30 +530,6 @@ check_cache(char *filename, struct stat *sb_ori)
 }
 
 /*
- * Returns the value for EXIF tag "t" from EXIF data structure "ed".
- */
-static char *
-get_exif_data(ExifData *ed, ExifTag t)
-{
-	ExifEntry *ee;
-	char p[EXIFSIZ], *x;
-	int i;
-
-	for (i = 0; i < EXIF_IFD_COUNT; i++) {
-		if (ed->ifd[i] && ed->ifd[i]->count) {
-			ee = exif_content_get_entry(ed->ifd[i], t);
-			if (ee && exif_entry_get_value(ee, p, EXIFSIZ)
-			    != NULL) {
-				check_alloc(x = strdup(p));
-				return (x);
-			}
-		}
-	}
-
-	return NULL;
-}
-
-/*
  * Comparision functions used by qsort().
  */
 static int
@@ -644,10 +554,8 @@ usage(void)
 	fprintf(stderr, "\nUsage:\n");
 	fprintf(stderr, "pts-swiggle [options] /path/to/gallery\n\n");
 	fprintf(stderr, "Available options:\n");
-	fprintf(stderr, "   -c <x> ... columns per thumbnail index page "
-	    "(default: %d)\n", cols);
-	fprintf(stderr, "   -r <y> ... rows per thumbnail index page "
-	    "(default: %d)\n", rows);
+	fprintf(stderr, "   -c <x> ... columns per thumbnail index page\n");
+	fprintf(stderr, "   -r <y> ... rows per thumbnail index page\n");
 	fprintf(stderr, "   -h <i> ... height of the thumbnails in pixel "
 	    "(default: %d)\n", thumbheight);
 	fprintf(stderr, "   -H <j> ... height of the scaled images in pixel "
@@ -663,8 +571,7 @@ usage(void)
 	    "'name')\n");
 	fprintf(stderr, "   -d     ... title string for gallery and albums, "
 	    "if not provided in\n");
-	fprintf(stderr, "              '.description' files (default: '%s')\n",
-	    defaultdesc);
+	fprintf(stderr, "              '.description' files\n");
 	fprintf(stderr, "   -v     ... show version info\n\n");
 	exit(EXIT_FAILURE);
 }
