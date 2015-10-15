@@ -87,16 +87,16 @@ struct imgdesc {
 /*
  * Global variables.
  */
-char *albumdesc = "";
-char *defaultdesc = "my webgallery";
-char *progname = "";
-int cols = 5;
-int rows = 3;
-int scaleheight = 480;
-int thumbheight = 96;
-int force = 0;
-int bilinear = 0;
-int rm_orphans = 1;
+static char *albumdesc = "";
+static char *defaultdesc = "my webgallery";
+static char *progname = "";
+static int cols = 5;
+static int rows = 3;
+static int scaleheight = 480;
+static int thumbheight = 96;
+static int force = 0;
+static int bilinear = 0;
+static int rm_orphans = 1;
 
 #define	MAX_PER_PAGE	(cols*rows)
 #define	EXIFSIZ		BUFSIZ
@@ -104,20 +104,19 @@ int rm_orphans = 1;
 /*
  * Function declarations.
  */
-void	process_dir(char *);
-void	process_images(struct imginfo *, int);
-int	check_cache(char *, struct stat *);
-void	create_cache_dirs(char *);
-void	create_images(struct imginfo *, int);
-void	delete_image(struct imginfo *);
-void	delete_images(struct imginfo *, int);
-int	sort_by_filename(const void *, const void *);
-char *	get_exif_data(ExifData *, ExifTag);
-void	usage(void);
-void	version(void);
-int resize_bicubic(struct jpeg_decompress_struct *,
+static void process_dir(char *);
+static void process_images(struct imginfo *, int);
+static int check_cache(char *, struct stat *);
+static void create_images(struct imginfo *, int);
+static void delete_image(struct imginfo *);
+static void delete_images(struct imginfo *, int);
+static int sort_by_filename(const void *, const void *);
+static char *get_exif_data(ExifData *, ExifTag);
+static void usage(void);
+static void version(void);
+static int resize_bicubic(struct jpeg_decompress_struct *,
     struct jpeg_compress_struct *, const unsigned char *, unsigned char **);
-int resize_bilinear(struct jpeg_decompress_struct *,
+static int resize_bilinear(struct jpeg_decompress_struct *,
     struct jpeg_compress_struct *, const unsigned char *, unsigned char **);
 
 static void check_alloc(const void *p) {
@@ -259,7 +258,7 @@ main(int argc, char **argv)
  * of the scaled images and html pages. Returns the number of images
  * found in this directory.
  */
-void process_dir(char *dir) {
+static void process_dir(char *dir) {
 	struct imginfo *imglist;
 	int imgcount;
 	char *i, *p;
@@ -316,7 +315,7 @@ void process_dir(char *dir) {
 	    imgcount != 1 ? "s" : "", albumdesc != NULL ? albumdesc : dir);
 }
 
-void process_images(struct imginfo *imglist, int imgcount) {
+static void process_images(struct imginfo *imglist, int imgcount) {
 	if (!imgcount) return;
 	/* Sort the list according to desired sorting function. */
 	qsort(imglist, imgcount, sizeof(struct imginfo), sort_by_filename);
@@ -324,7 +323,7 @@ void process_images(struct imginfo *imglist, int imgcount) {
 }
 
 /* TODO(pts): Remove exif support completely. */
-void delete_image(struct imginfo *img) {
+static void delete_image(struct imginfo *img) {
 	free(img->filename); img->filename = NULL;
 	free(img->description); img->description = NULL;
 	free(img->model); img->model = NULL;
@@ -334,7 +333,7 @@ void delete_image(struct imginfo *img) {
 	free(img->aperture); img->aperture = NULL;
 }
 
-void delete_images(struct imginfo *imglist, int imgcount) {
+static void delete_images(struct imginfo *imglist, int imgcount) {
 	int i;
 	for (i = 0; i < imgcount; ++i) {
 		delete_image(imglist + i);
@@ -349,7 +348,7 @@ void delete_images(struct imginfo *imglist, int imgcount) {
  * in parameter "dir".
  * Also fills in various image information into each member of "imglist".
  */
-void
+static void
 create_images(struct imginfo *imglist, int imgcount)
 {
 	char final[MAXPATHLEN], tmp[MAXPATHLEN], *ori;
@@ -574,7 +573,7 @@ create_images(struct imginfo *imglist, int imgcount)
 		free(id);
 }
 
-int
+static int
 check_cache(char *filename, struct stat *sb_ori)
 {
 	struct stat sb;
@@ -599,7 +598,7 @@ check_cache(char *filename, struct stat *sb_ori)
 /*
  * Returns the value for EXIF tag "t" from EXIF data structure "ed".
  */
-char *
+static char *
 get_exif_data(ExifData *ed, ExifTag t)
 {
 	ExifEntry *ee;
@@ -623,7 +622,7 @@ get_exif_data(ExifData *ed, ExifTag t)
 /*
  * Comparision functions used by qsort().
  */
-int
+static int
 sort_by_filename(const void *a, const void *b)
 {
 	struct imginfo *ia = (struct imginfo*)a;
@@ -632,46 +631,14 @@ sort_by_filename(const void *a, const void *b)
 	return strcmp(ia->filename, ib->filename);
 }
 
-int
-sort_by_mtime(const void *a, const void *b)
-{
-	const struct imginfo *x, *y;
-
-	x = a;
-	y = b;
-
-	if (x->mtime < y->mtime)
-		return (-1);
-	else if (x->mtime > y->mtime)
-		return (1);
-	else
-		return (0);
-}
-
-int
-sort_by_filesize(const void *a, const void *b)
-{
-	const struct imginfo *x, *y;
-
-	x = a;
-	y = b;
-
-	if (x->filesize < y->filesize)
-		return (-1);
-	else if (x->filesize > y->filesize)
-		return (1);
-	else
-		return (0);
-}
-
-void
+static void
 version(void)
 {
 	fprintf(stderr, "swiggle version %s\n", SWIGGLE_VERSION);
 	exit(EXIT_SUCCESS);
 }
 
-void
+static void
 usage(void)
 {
 	fprintf(stderr, "\nUsage:\n");
@@ -708,7 +675,7 @@ usage(void)
  * the result in "o".
  * Scaling is done with a bicubic algorithm (stolen from ImageMagick :-)).
  */
-int
+static int
 resize_bicubic(struct jpeg_decompress_struct *dinfo,
     struct jpeg_compress_struct *cinfo, const unsigned char *p,
     unsigned char **o)
@@ -850,7 +817,7 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
  * the result in "o".
  * Scaling is done with a bilinear algorithm.
  */
-int
+static int
 resize_bilinear(struct jpeg_decompress_struct *dinfo,
     struct jpeg_compress_struct *cinfo, const unsigned char *p,
     unsigned char **o)
