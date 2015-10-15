@@ -83,6 +83,8 @@ int	processdir(char *);
 int	check_cache(char *, struct stat *);
 void	create_cache_dirs(char *);
 void	create_images(char *, struct imginfo *, int);
+void	delete_image(struct imginfo *);
+void	delete_images(struct imginfo *, int);
 int	sort_by_filename(const void *, const void *);
 int	sort_by_filesize(const void *, const void *);
 int	sort_by_mtime(const void *, const void *);
@@ -231,7 +233,7 @@ processdir(char *dir)
 	char *i, *p;
 	int imgcount;
 	struct dirent *dent;
-	struct imginfo *imglist;
+	struct imginfo *imglist, *img;
 #ifdef NO_D_TYPE
 	char buf[MAXPATHLEN];
 	struct stat sb;
@@ -278,9 +280,15 @@ processdir(char *dir)
 			    strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		imglist[imgcount].filename = i;
-		
-		imgcount++;
+		img = &imglist[imgcount++];
+		img->filename = i;
+		/* TODO(pts): Why are these needed? */
+		img->description = NULL;
+		img->model = NULL;
+		img->datetime = NULL;
+		img->exposuretime = NULL;
+		img->flash = NULL;
+		img->aperture = NULL;
 	}
 	
 	if (closedir(thisdir)) {
@@ -303,13 +311,32 @@ processdir(char *dir)
 		x = create_thumbindex(dir, imglist, imgcount);
 		printf("%d thumbnail index pages created.\n", x);
 #endif
+		delete_images(imglist, imgcount);
 	}
 
-	free(imglist);
 	
 	printf("%d image%s processed in album '%s'.\n", imgcount,
 	    imgcount != 1 ? "s" : "", albumdesc != NULL ? albumdesc : dir);
 	return (imgcount);
+}
+
+/* TODO(pts): Remove exif support completely. */
+void delete_image(struct imginfo *img) {
+  free(img->filename); img->filename = NULL;
+  free(img->description); img->description = NULL;
+  free(img->model); img->model = NULL;
+  free(img->datetime); img->datetime = NULL;
+  free(img->exposuretime); img->exposuretime = NULL;
+  free(img->flash); img->flash = NULL;
+  free(img->aperture); img->aperture = NULL;
+}
+
+void delete_images(struct imginfo *imglist, int imgcount) {
+  int i;
+  for (i = 0; i < imgcount; ++i) {
+    delete_image(imglist + i);
+  }
+  free(imglist);
 }
 
 /*
@@ -443,6 +470,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 		/* TODO(pts): Fix too large width. */
 		if (!(imglist[i].scaleheight < imglist[i].height ||
 		      imglist[i].scalewidth < imglist[i].width)) {
+			jpeg_destroy_decompress(&dinfo);
 			fclose(infile);
 			continue;
 		}
@@ -673,14 +701,14 @@ get_img_desc(struct imgdesc *id, int idcount, char *filename)
 	int i;
 	
 	if (id == NULL)
-		return (filename);
+		return strdup(filename);
 	
 	for (i = 0; i < idcount; i++) {
 		if (strcmp(id[i].filename, filename) == 0)
-			return (id[i].desc);
+			return strdup(id[i].desc);
 	}
 	
-	return (filename);
+	return strdup(filename);
 }
 
 /*
@@ -692,8 +720,6 @@ get_exif_data(ExifData *ed, ExifTag t)
 	ExifEntry *ee;
 	char p[EXIFSIZ], *x;
 	int i;
-	
-	x = NULL;
 	
 	for (i = 0; i < EXIF_IFD_COUNT; i++) {
 		if (ed->ifd[i] && ed->ifd[i]->count) {
@@ -711,7 +737,7 @@ get_exif_data(ExifData *ed, ExifTag t)
 		}
 	}
 	
-	return (x);
+	return NULL;
 }
 
 /*
