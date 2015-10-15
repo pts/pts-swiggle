@@ -82,7 +82,8 @@ int (*sort_func)();
 /*
  * Function declarations.
  */
-int	processdir(char *);
+void	process_dir(char *);
+void	process_images(struct imginfo *, int);
 int	check_cache(char *, struct stat *);
 void	create_cache_dirs(char *);
 void	create_images(struct imginfo *, int);
@@ -96,6 +97,26 @@ int	sort_dirs(const void *, const void *);
 char *	get_exif_data(ExifData *, ExifTag);
 void	usage(void);
 void	version(void);
+
+static void check_alloc(const void *p) {
+	if (!p) {
+		const char msg[] = "pts-swiggle: Out of memory, aborting.\n";
+		(void)-write(2, msg, sizeof(msg) - 1);
+		abort();
+	}
+}
+
+static void create_image(char *filename_take, struct imginfo *img) {
+	/* TODO(pts): Do exponential reallocation. */
+	img->filename = filename_take;
+	/* TODO(pts): Why are these needed? */
+	img->description = NULL;
+	img->model = NULL;
+	img->datetime = NULL;
+	img->exposuretime = NULL;
+	img->flash = NULL;
+	img->aperture = NULL;
+}
 
 /*
  * swiggle generates a web image gallery. It scales down images in
@@ -188,7 +209,7 @@ main(int argc, char **argv)
 
 	exit_code = EXIT_SUCCESS;
 
-	/* Put the dirs to increasing order for deterministic processing. */
+	/* Put the inputs to increasing order for deterministic processing. */
 	qsort(argv, argc, sizeof argv[0],
 	      (int(*)(const void*,const void*))strcmp);
 
@@ -200,28 +221,26 @@ main(int argc, char **argv)
 			continue;
 		}
 
-		if (!S_ISDIR(sb.st_mode)) {
-			fprintf(stderr, "%s: '%s' is not a directory\n", progname,
+		if (S_ISDIR(sb.st_mode)) {
+			if (argv[i][strlen(argv[i])-1] == '/')
+				argv[i][strlen(argv[i])-1] = '\0';
+			process_dir(argv[i]);
+		} else if (S_ISREG(sb.st_mode)) {
+			struct imginfo img;
+			char *fn;
+			check_alloc(fn = strdup(argv[i]));
+			create_image(fn, &img);
+			process_images(&img, 1);
+			delete_image(&img);
+		} else {
+			fprintf(stderr, "%s: '%s' is not a file or directory\n", progname,
 			    argv[i]);
 			exit_code = EXIT_FAILURE;
-			continue;
 		}
 
-		if (argv[i][strlen(argv[i])-1] == '/')
-			argv[i][strlen(argv[i])-1] = '\0';
-
-		processdir(argv[i]);
 	}
 
 	return exit_code;
-}
-
-static void check_alloc(const void *p) {
-	if (!p) {
-		const char msg[] = "pts-swiggle: Out of memory, aborting.\n";
-		(void)-write(2, msg, sizeof(msg) - 1);
-		abort();
-	}
 }
 
 /*
@@ -230,22 +249,18 @@ static void check_alloc(const void *p) {
  * of the scaled images and html pages. Returns the number of images
  * found in this directory.
  */
-int
-processdir(char *dir)
-{
-	char *i, *p;
+void process_dir(char *dir) {
+	struct imginfo *imglist;
 	int imgcount;
+	char *i, *p;
 	unsigned dir_size;
 	struct dirent *dent;
-	struct imginfo *imglist, *img;
 #ifdef NO_D_TYPE
 	char buf[MAXPATHLEN];
 	struct stat sb;
 #endif
 	DIR *thisdir;
 
-	imgcount = 0;
-	imglist = NULL;
 
 	if ((thisdir = opendir(dir)) == NULL) {
 		fprintf(stderr, "%s: can't opendir(%s): %s\n", progname, dir,
@@ -254,6 +269,8 @@ processdir(char *dir)
 	}
 
 	dir_size = strlen(dir);
+	imglist = NULL;
+	imgcount = 0;
 	while ((dent = readdir(thisdir)) != NULL) {
         /* We only want regular files that have a filename suffix. */
 #ifdef NO_D_TYPE
@@ -272,21 +289,10 @@ processdir(char *dir)
 		if (strcasecmp(p, "jpg" ) != 0 && strcasecmp(p, "jpeg") != 0)
 			continue;
 
-		/* Allocate memory for this image and store it in the list. */
-		
 		check_alloc(i = malloc(dir_size + strlen(dent->d_name) + 2));
 		sprintf(i, "%s/%s", dir, dent->d_name);
-		/* TODO(pts): Do exponential reallocation. */
 		check_alloc(imglist = realloc(imglist, (imgcount + 1) * sizeof(struct imginfo)));
-		img = &imglist[imgcount++];
-		img->filename = i;
-		/* TODO(pts): Why are these needed? */
-		img->description = NULL;
-		img->model = NULL;
-		img->datetime = NULL;
-		img->exposuretime = NULL;
-		img->flash = NULL;
-		img->aperture = NULL;
+		create_image(i, &imglist[imgcount++]);
 	}
 
 	if (closedir(thisdir)) {
@@ -294,28 +300,25 @@ processdir(char *dir)
 		    strerror(errno));
 		exit(EXIT_FAILURE);
 	}
-
-	if (imgcount) {
-		/* Sort the list according to desired sorting function. */
-		qsort(imglist, imgcount, sizeof(struct imginfo), sort_by_filename);
-		create_images(imglist, imgcount);
-
-
-#if 0  /**** pts ****/
-		/* TODO(pts): Remove these, and sort_func? */
-		/* Sort the list according to desired sorting function. */
-		qsort(imglist, imgcount, sizeof(struct imginfo), sort_func);
-		create_html(dir, imglist, imgcount);
-		x = create_thumbindex(dir, imglist, imgcount);
-		printf("%d thumbnail index pages created.\n", x);
-#endif
-		delete_images(imglist, imgcount);
-	}
-
-
+	process_images(imglist, imgcount);
+	delete_images(imglist, imgcount);
 	printf("%d image%s processed in album '%s'.\n", imgcount,
 	    imgcount != 1 ? "s" : "", albumdesc != NULL ? albumdesc : dir);
-	return (imgcount);
+}
+
+void process_images(struct imginfo *imglist, int imgcount) {
+	if (!imgcount) return;
+	/* Sort the list according to desired sorting function. */
+	qsort(imglist, imgcount, sizeof(struct imginfo), sort_by_filename);
+	create_images(imglist, imgcount);
+#if 0  /**** pts ****/
+	/* TODO(pts): Remove these, and sort_func? */
+	/* Sort the list according to desired sorting function. */
+	qsort(imglist, imgcount, sizeof(struct imginfo), sort_func);
+	create_html(dir, imglist, imgcount);
+	x = create_thumbindex(dir, imglist, imgcount);
+	printf("%d thumbnail index pages created.\n", x);
+#endif
 }
 
 /* TODO(pts): Remove exif support completely. */
