@@ -42,11 +42,6 @@
 /* TODO(pts): Try all files as JPEG, don't die on JPEG read errors. */
 /* TODO(pts): Remove unused command-line flags and their help. */
 
-/* Configuration */
-#if __linux
-#define HAVE_D_TYPE 1
-#endif
-
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -229,16 +224,12 @@ main(int argc, char **argv)
  */
 static void process_dir(char *dir) {
 	struct imginfo *imglist;
-	int imgcount;
+	unsigned imgcount;
 	char *i, *p;
 	unsigned dir_size;
 	struct dirent *dent;
-#ifndef HAVE_D_TYPE
-	char buf[MAXPATHLEN];
 	struct stat sb;
-#endif
 	DIR *thisdir;
-
 
 	if ((thisdir = opendir(dir)) == NULL) {
 		fprintf(stderr, "%s: can't opendir(%s): %s\n", g_flags.progname, dir,
@@ -250,25 +241,23 @@ static void process_dir(char *dir) {
 	imglist = NULL;
 	imgcount = 0;
 	while ((dent = readdir(thisdir)) != NULL) {
-        /* We only want regular files that have a filename suffix. */
-#ifndef HAVE_D_TYPE  /* TODO(pts): Do all filesystems support it? */
-		sprintf(buf, "%s/%s", dir, dent->d_name);
-		if ((stat(buf, &sb) == 0 && !S_ISREG(sb.st_mode)) ||
-		    ((p = strrchr(dent->d_name, '.')) == NULL))
-#else
-		if ((dent->d_type != DT_REG) ||
-		    (p = strrchr(dent->d_name, '.')) == NULL)
-#endif
-			continue;
-
-		p++;
-
+	        /* We only want regular files that have a filename suffix. */
+		if ((p = strrchr(dent->d_name, '.')) == NULL) continue;
+		++p;
 		/* We currently only handle .jpg files. */
-		if (strcasecmp(p, "jpg" ) != 0 && strcasecmp(p, "jpeg") != 0)
-			continue;
-
+		/* TODO(pts): Remove this `if' */
+		if (strcasecmp(p, "jpg" ) != 0 && strcasecmp(p, "jpeg") != 0) continue;
 		check_alloc(i = malloc(dir_size + strlen(dent->d_name) + 2));
 		sprintf(i, "%s/%s", dir, dent->d_name);
+		if (
+#ifdef DT_UNKNOWN
+		    dent->d_type == DT_REG ? 0 :
+		    dent->d_type != DT_UNKNOWN ? 1 :
+#endif
+		    (stat(i, &sb) == 0 && !S_ISREG(sb.st_mode))) {
+			free(i);
+			continue;
+		}
 		/* TODO(pts): Do exponential reallocation. */
 		check_alloc(imglist = realloc(imglist, (imgcount + 1) * sizeof(struct imginfo)));
 		create_image(i, &imglist[imgcount++]);
