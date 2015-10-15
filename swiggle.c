@@ -32,7 +32,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * 
+ *
  * $Id: swiggle.c,v 1.30 2007/01/14 12:03:36 le Exp $
  *
  */
@@ -78,7 +78,7 @@ int (*sort_func)();
 
 /*
  * Function declarations.
- */ 
+ */
 int	processdir(char *);
 int	check_cache(char *, struct stat *);
 void	create_cache_dirs(char *);
@@ -98,17 +98,17 @@ void	version(void);
 
 /*
  * swiggle generates a web image gallery. It scales down images in
- * given directories to thumbnail size and "normal view" size and 
+ * given directories to thumbnail size and "normal view" size and
  * generates static html pages and thumbnail index pages for all images.
  */
-int 
+int
 main(int argc, char **argv)
 {
 	char *eptr;
 	int i;
 	int exit_code;
 	struct stat sb;
-	
+
 	progname = argv[0];
 	sort_func = sort_by_filename;
 
@@ -179,7 +179,7 @@ main(int argc, char **argv)
 			usage();
 		}
 	}
-	
+
 	argc -= optind;
 	argv += optind;
 	if (argc < 1)
@@ -191,7 +191,7 @@ main(int argc, char **argv)
 	qsort(argv, argc, sizeof argv[0],
 	      (int(*)(const void*,const void*))strcmp);
 
-	for (i = 0; i < argc; ++i) {	
+	for (i = 0; i < argc; ++i) {
 		if (stat(argv[i], &sb)) {
 			fprintf(stderr, "%s: can't stat(%s): %s\n", progname, argv[i],
 			    strerror(errno));
@@ -211,7 +211,7 @@ main(int argc, char **argv)
 
 		processdir(argv[i]);
 	}
-	
+
 	return exit_code;
 }
 
@@ -227,7 +227,7 @@ static int filename_cmp(const void *a, const void *b) {
  * of the scaled images and html pages. Returns the number of images
  * found in this directory.
  */
-int 
+int
 processdir(char *dir)
 {
 	char *i, *p;
@@ -242,13 +242,13 @@ processdir(char *dir)
 
 	imgcount = 0;
 	imglist = NULL;
-	
+
 	if ((thisdir = opendir(dir)) == NULL) {
-		fprintf(stderr, "%s: can't opendir(%s): %s\n", progname, dir, 
+		fprintf(stderr, "%s: can't opendir(%s): %s\n", progname, dir,
 		    strerror(errno));
 		exit(EXIT_FAILURE);
 	}
-	
+
 	while ((dent = readdir(thisdir)) != NULL) {
         /* We only want regular files that have a filename suffix. */
 #ifdef NO_D_TYPE
@@ -262,21 +262,21 @@ processdir(char *dir)
 			continue;
 
 		p++;
-		
+
 		/* We currently only handle .jpg files. */
-		if (strcasecmp(p, "jpg" ) != 0 && strcasecmp(p, "jpeg") != 0) 
+		if (strcasecmp(p, "jpg" ) != 0 && strcasecmp(p, "jpeg") != 0)
 			continue;
-		
+
 		/* Allocate memory for this image and store it in the list. */
 		if ((i = strdup(dent->d_name)) == NULL) {
-			fprintf(stderr, "%s: can't strdup(%s): %s\n", progname, 
+			fprintf(stderr, "%s: can't strdup(%s): %s\n", progname,
 			    dent->d_name, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
 		/* TODO(pts): Do exponential reallocation. */
 		if ((imglist = realloc(imglist, (imgcount+1) *
 		    sizeof(struct imginfo))) == NULL) {
-			fprintf(stderr, "%s: can't realloc: %s\n", progname, 
+			fprintf(stderr, "%s: can't realloc: %s\n", progname,
 			    strerror(errno));
 			exit(EXIT_FAILURE);
 		}
@@ -290,9 +290,9 @@ processdir(char *dir)
 		img->flash = NULL;
 		img->aperture = NULL;
 	}
-	
+
 	if (closedir(thisdir)) {
-		fprintf(stderr, "%s: error on closedir(%s): %s", progname, dir, 
+		fprintf(stderr, "%s: error on closedir(%s): %s", progname, dir,
 		    strerror(errno));
 		exit(EXIT_FAILURE);
 	}
@@ -302,7 +302,7 @@ processdir(char *dir)
 
 	if (imgcount) {
 		create_images(dir, imglist, imgcount);
-		
+
 		/* Sort the list according to desired sorting function. */
 		qsort(imglist, imgcount, sizeof(struct imginfo), sort_func);
 
@@ -314,7 +314,7 @@ processdir(char *dir)
 		delete_images(imglist, imgcount);
 	}
 
-	
+
 	printf("%d image%s processed in album '%s'.\n", imgcount,
 	    imgcount != 1 ? "s" : "", albumdesc != NULL ? albumdesc : dir);
 	return (imgcount);
@@ -340,13 +340,13 @@ void delete_images(struct imginfo *imglist, int imgcount) {
 }
 
 /*
- * Creates thumbnails and scaled images (if they aren't already cached) 
- * for each image given in parameter "imglist", which has "imgcount" 
- * members, in the subdirs '.scaled' and '.thumbs' of the directory given 
+ * Creates thumbnails and scaled images (if they aren't already cached)
+ * for each image given in parameter "imglist", which has "imgcount"
+ * members, in the subdirs '.scaled' and '.thumbs' of the directory given
  * in parameter "dir".
  * Also fills in various image information into each member of "imglist".
  */
-void 
+void
 create_images(char *dir, struct imginfo *imglist, int imgcount)
 {
 	char final[MAXPATHLEN], tmp[MAXPATHLEN], ori[MAXPATHLEN];
@@ -363,26 +363,26 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 	ExifData *ed;
 	JSAMPARRAY samp;
 	JSAMPROW row_pointer[1];
-	
+
 	id = NULL;
-	
+
 	dinfo.err = jpeg_std_error(&jerr);
 	cinfo.err = jpeg_std_error(&jerr);
-	
+
 	idcount = read_img_desc(dir, &id);
-	
+
 	if (bilinear)
 		resize_func = resize_bilinear;
-	else 
+	else
 		resize_func = resize_bicubic;
-	
+
 	for (i = 0; i < imgcount; i++) {
 		p = o = NULL;
 		ori_in_mem = 0;
-		
+
 		sprintf(ori, "%s/%s", dir, imglist[i].filename);
 		printf("Image %s\n", ori);
-		
+
 		if (stat(ori, &sb)) {
 			fprintf(stderr, "%s: can't stat(%s): %s\n", progname,
 			    ori, strerror(errno));
@@ -420,7 +420,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 
 		/*
 		 * Open the file and get some basic image information.
-		 * We use width and height from the JPEG header and not 
+		 * We use width and height from the JPEG header and not
 		 * from the EXIF data, since it's possible that the EXIF
 		 * data isn't correct.
 		 */
@@ -434,14 +434,14 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 		jpeg_create_decompress(&dinfo);
 		jpeg_stdio_src(&dinfo, infile);
 		(void)jpeg_read_header(&dinfo, FALSE);  /* !! don't abort the program on failure */
-		
+
 		imglist[i].filesize = sb.st_size;
 		imglist[i].mtime = sb.st_mtime;
 		imglist[i].width = dinfo.image_width;
 		imglist[i].height = dinfo.image_height;
 		imglist[i].description = get_img_desc(id, idcount,
 		    imglist[i].filename);
-		
+
 		/* Get the EXIF information from the file. */
 		if ((ed = exif_data_new_from_file(ori)) != NULL) {
 			imglist[i].model = get_exif_data(ed, EXIF_TAG_MODEL);
@@ -461,7 +461,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			imglist[i].aperture = NULL;
 			imglist[i].flash = NULL;
 		}
-		
+
 		/* ratio needed to scale image correctly. */
 		ratio = ((double)imglist[i].width / (double)imglist[i].height);
 		imglist[i].scaleheight = scaleheight;
@@ -474,13 +474,13 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			fclose(infile);
 			continue;
 		}
-		    
+
 		imglist[i].thumbheight = thumbheight;
 		imglist[i].thumbwidth = (int)((double)imglist[i].thumbheight *
 		    ratio + 0.5);
-		
+
 		/*
-		 * If the image is not cached, we need to read it in, 
+		 * If the image is not cached, we need to read it in,
 		 * resize it, and write it out.
 		 */
 		if (cached == 0) {
@@ -490,7 +490,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 				    progname, tmp, strerror(errno));
 				exit(EXIT_FAILURE);
 			}
-			
+
 			/*
 			 * Use libjpeg's handy feature to downscale the
 			 * original on the fly while reading it in.
@@ -503,7 +503,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 				dinfo.scale_denom = 4;
 			else if ((int) factor >= 2)
 				dinfo.scale_denom = 2;
-			
+
 			jpeg_start_decompress(&dinfo);
 			row_width = dinfo.output_width * dinfo.num_components;
 			p = malloc(row_width * dinfo.output_height *
@@ -515,7 +515,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			}
 			samp = (*dinfo.mem->alloc_sarray)
 			    ((j_common_ptr)&dinfo, JPOOL_IMAGE, row_width, 1);
-			
+
 			/* Read the image into memory. */
 			n = 0;
 			while (dinfo.output_scanline < dinfo.output_height) {
@@ -524,9 +524,9 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 				n++;
 			}
 			jpeg_finish_decompress(&dinfo);
-			
+
 			ori_in_mem = 1; /* The original is now in memory. */
-			
+
 			/* Prepare the compression object. */
 			jpeg_create_compress(&cinfo);
 			jpeg_stdio_dest(&cinfo, outfile);
@@ -536,7 +536,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			cinfo.in_color_space = dinfo.out_color_space;
 			jpeg_set_defaults(&cinfo);
 			jpeg_set_quality(&cinfo, 50, FALSE);  /**** pts ****/
-			
+
 			o = malloc(cinfo.image_width * cinfo.image_height *
 			    cinfo.input_components * SIZE_UCHAR);
 			if (o == NULL) {
@@ -544,7 +544,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 				    progname, strerror(errno));
 				exit(EXIT_FAILURE);
 			}
-			
+
 			/* Resize the image. */
 			if (resize_func(&dinfo, &cinfo, p, &o)) {
 				fprintf(stderr, "%s: can't resize image '%s': "
@@ -552,7 +552,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 				    strerror(errno));
 				exit(EXIT_FAILURE);
 			}
-			
+
 			/* Write the image out. */
 			jpeg_start_compress(&cinfo, FALSE);
 			while (cinfo.next_scanline < cinfo.image_height) {
@@ -564,7 +564,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			jpeg_finish_compress(&cinfo);
 			fclose(outfile);
 			jpeg_destroy_compress(&cinfo);
-			
+
 			if (rename(tmp, final)) {
 				fprintf(stderr, "%s: can't rename(%s, %s): "
 				    "%s\n", progname, tmp, final,
@@ -575,7 +575,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 
 		fclose(infile);
 		jpeg_destroy_decompress(&dinfo);
-		
+
 		/*
 		 * If we have read the original, free any associated
 		 * ressources.
@@ -584,11 +584,11 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			free(o);
 			free(p);
 		}
-		
+
 		if (ed != NULL)
 			exif_data_free(ed);
 	}
-	
+
 	if (id != NULL)
 		free(id);
 }
@@ -616,8 +616,8 @@ check_cache(char *filename, struct stat *sb_ori)
 }
 
 /*
- * Reads in the description file, if present in given directory "dir", 
- * and fills a list of image descriptions, pointed to by "id". 
+ * Reads in the description file, if present in given directory "dir",
+ * and fills a list of image descriptions, pointed to by "id".
  * Returns the count of found descriptions.
  */
 int
@@ -627,15 +627,15 @@ read_img_desc(char *dir, struct imgdesc **id)
 	int n;
 	struct imgdesc *i;
 	FILE *desc;
-	
+
 	n = 0;
-	
+
 	/* Reset the description for the current album. */
 	albumdesc = NULL;
 	i = NULL;
-	
-	sprintf(path, "%s/.description", dir);   
-	
+
+	sprintf(path, "%s/.description", dir);
+
 	desc = fopen(path, "r");
 
 	if (desc == NULL) {
@@ -652,41 +652,41 @@ read_img_desc(char *dir, struct imgdesc **id)
 
 		if (w[strlen(w)-1] == '\n')
 			w[strlen(w)-1] = '\0';
-		
+
 		while (isspace(*w))
-			w++; 
-		
+			w++;
+
 		if ((d = strdup(w)) == NULL) {
 			fprintf(stderr, "%s: can't strdup(%s): %s\n",
-			    progname, w, strerror(errno)); 
+			    progname, w, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
 		/* We have found the album description. */
 		if (strcmp(p, ".") == 0) {
 			albumdesc = d;
 			continue;
 		}
-		
+
 		if ((f = strdup(p)) == NULL) {
 			fprintf(stderr, "%s: can't strdup(%s): %s\n", progname,
 			    p, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
 		i = realloc(i, (n + 1) * sizeof(struct imgdesc));
 		if (i == NULL) {
 			fprintf(stderr, "%s: can't realloc: %s\n", progname,
 			    strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
 		i[n].filename = f;
 		i[n].desc = d;
-		
+
 		n++;
 	}
-	
+
 	*id = i;
 	return (n);
 }
@@ -695,19 +695,19 @@ read_img_desc(char *dir, struct imgdesc **id)
  * Returns the image description for "filename" in the list pointed to
  * by "id". Returns the given filename if the description isn't found.
  */
-char * 
+char *
 get_img_desc(struct imgdesc *id, int idcount, char *filename)
 {
 	int i;
-	
+
 	if (id == NULL)
 		return strdup(filename);
-	
+
 	for (i = 0; i < idcount; i++) {
 		if (strcmp(id[i].filename, filename) == 0)
 			return strdup(id[i].desc);
 	}
-	
+
 	return strdup(filename);
 }
 
@@ -720,7 +720,7 @@ get_exif_data(ExifData *ed, ExifTag t)
 	ExifEntry *ee;
 	char p[EXIFSIZ], *x;
 	int i;
-	
+
 	for (i = 0; i < EXIF_IFD_COUNT; i++) {
 		if (ed->ifd[i] && ed->ifd[i]->count) {
 			ee = exif_content_get_entry(ed->ifd[i], t);
@@ -736,32 +736,32 @@ get_exif_data(ExifData *ed, ExifTag t)
 			}
 		}
 	}
-	
+
 	return NULL;
 }
 
 /*
  * Comparision functions used by qsort().
  */
-int 
+int
 sort_by_filename(const void *a, const void *b)
 {
 	const struct imginfo *x, *y;
-	
+
 	x = a;
 	y = b;
-	
+
 	return (strcoll(x->filename, y->filename));
 }
 
-int 
+int
 sort_by_mtime(const void *a, const void *b)
 {
 	const struct imginfo *x, *y;
-	
+
 	x = a;
 	y = b;
-	
+
 	if (x->mtime < y->mtime)
 		return (-1);
 	else if (x->mtime > y->mtime)
@@ -770,14 +770,14 @@ sort_by_mtime(const void *a, const void *b)
 		return (0);
 }
 
-int 
+int
 sort_by_filesize(const void *a, const void *b)
 {
 	const struct imginfo *x, *y;
-	
+
 	x = a;
 	y = b;
-	
+
 	if (x->filesize < y->filesize)
 		return (-1);
 	else if (x->filesize > y->filesize)
@@ -786,14 +786,14 @@ sort_by_filesize(const void *a, const void *b)
 		return (0);
 }
 
-int 
+int
 sort_dirs(const void *a, const void *b)
 {
 	const struct dirent *x, *y;
-	
+
 	x = a;
 	y = b;
-	
+
 	return (strcoll(x->d_name, y->d_name));
 }
 
@@ -804,7 +804,7 @@ version(void)
 	exit(EXIT_SUCCESS);
 }
 
-void 
+void
 usage(void)
 {
 	fprintf(stderr, "\nUsage:\n");
@@ -829,7 +829,7 @@ usage(void)
 	    "'name')\n");
 	fprintf(stderr, "   -d     ... title string for gallery and albums, "
 	    "if not provided in\n");
-	fprintf(stderr, "              '.description' files (default: '%s')\n", 
+	fprintf(stderr, "              '.description' files (default: '%s')\n",
 	    defaultdesc);
 	fprintf(stderr, "   -v     ... show version info\n\n");
 	exit(EXIT_FAILURE);

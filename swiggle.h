@@ -32,7 +32,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * 
+ *
  * $Id: swiggle.h,v 1.8 2006/11/12 21:41:46 le Exp $
  *
  */

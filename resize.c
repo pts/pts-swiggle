@@ -3,7 +3,7 @@
  *
  * This module is responsible for the scaling of images.
  *
- * Copyright (c) 2003 
+ * Copyright (c) 2003
  *  Lukas Ertl <l.ertl@univie.ac.at>.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,7 +34,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * 
+ *
  * $Id: resize.c,v 1.11 2004/10/23 20:57:02 le Exp $
  *
  */
@@ -66,24 +66,24 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
 	unsigned s_row_width, ty, t_row_width, x, y, num_rows;
 	double factor, *s, *scanline, *scale_scanline;
 	double *t, x_scale, x_span, y_scale, y_span, *y_vector;
-	
+
 	q = NULL;
-	
+
 	/* RGB images have 3 components, grayscale images have only one. */
 	comp = dinfo->num_components;
 	s_row_width = dinfo->output_width * comp;
 	t_row_width = cinfo->image_width  * comp;
 	factor = (double)cinfo->image_width / (double)dinfo->output_width;
-	
+
 	if ( *o == NULL )
 		return (-1);
-	
+
 	/* No scaling needed. */
 	if (dinfo->output_width == cinfo->image_width) {
 		memcpy(*o, p, s_row_width * dinfo->output_height);
 		return (0);
 	}
-	
+
 	x_vector = malloc(s_row_width * SIZE_UCHAR);
 	if (x_vector == NULL)
 		return (-1);
@@ -96,19 +96,19 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
 	scale_scanline = malloc((t_row_width + comp) * sizeof(double));
 	if (scale_scanline == NULL)
 		return (-1);
-	
+
 	num_rows = 0;
 	next_row = 1;
 	y_span = 1.0;
 	y_scale = factor;
-	
+
 	for (y = 0; y < cinfo->image_height; y++) {
 		ty = y * t_row_width;
 		q = *o;
-		
+
 		bzero(y_vector, s_row_width * sizeof(double));
 		bzero(scale_scanline, t_row_width * sizeof(double));
-		
+
 		/* Scale Y-dimension. */
 		while (y_scale < y_span) {
 			if (next_row && num_rows < dinfo->output_height) {
@@ -142,12 +142,12 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
 			next_row = 1;
 		}
 		y_span = 1.0;
-		
+
 		next_col = 0;
 		x_span   = 1.0;
 		s = scanline;
 		t = scale_scanline;
-		
+
 		/* Scale X dimension. */
 		for (x = 0; x < dinfo->output_width; x++) {
 			x_scale = factor;
@@ -177,18 +177,18 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
 			}
 			s += comp;
 		}
-		
+
 		/* Copy scanline to target. */
 		t = scale_scanline;
 		for (x = 0; x < t_row_width; x++)
 			q[ty+x] = (unsigned char)t[x];
 	}
-	
+
 	free(x_vector);
 	free(y_vector);
 	free(scanline);
 	free(scale_scanline);
-	
+
 	return (0);
 }
 
@@ -199,7 +199,7 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
  * Scaling is done with a bilinear algorithm.
  */
 int
-resize_bilinear(struct jpeg_decompress_struct *dinfo, 
+resize_bilinear(struct jpeg_decompress_struct *dinfo,
     struct jpeg_compress_struct *cinfo, const unsigned char *p,
     unsigned char **o)
 {
@@ -207,24 +207,24 @@ resize_bilinear(struct jpeg_decompress_struct *dinfo,
 	unsigned ceil_x, ceil_y, floor_x, floor_y, s_row_width;
 	unsigned tcx, tcy, tfx, tfy, tx, ty, t_row_width, x, y;
 	unsigned char *q;
-	
+
 	/* RGB images have 3 components, grayscale images have only one. */
 	s_row_width = dinfo->num_components * dinfo->output_width;
 	t_row_width = dinfo->num_components * cinfo->image_width;
-	
+
 	factor = (double)dinfo->output_width / (double)cinfo->image_width;
-	
+
 	if (*o == NULL)
 		return (-1);
-	
+
 	/* No scaling needed. */
 	if (dinfo->output_width == cinfo->image_width) {
 		memcpy(*o, p, s_row_width * dinfo->output_height);
 		return (0);
 	}
-	
+
 	q = *o;
-	
+
 	for (y = 0; y < cinfo->image_height; y++) {
 		for (x = 0; x < cinfo->image_width; x++) {
 			floor_x = (unsigned)(x * factor);
@@ -239,20 +239,20 @@ resize_bilinear(struct jpeg_decompress_struct *dinfo,
 			fraction_y = (y * factor) - floor_y;
 			one_minus_x = 1.0 - fraction_x;
 			one_minus_y = 1.0 - fraction_y;
-			
+
 			tx  = x * dinfo->num_components;
 			ty  = y * t_row_width;
 			tfx = floor_x * dinfo->num_components;
 			tfy = floor_y * s_row_width;
 			tcx = ceil_x * dinfo->num_components;
 			tcy = ceil_y * s_row_width;
-			
+
 			q[tx + ty] = one_minus_y *
 			    (one_minus_x * p[tfx + tfy] +
 			    fraction_x * p[tcx + tfy]) +
 			    fraction_y * (one_minus_x * p[tfx + tcy] +
 			    fraction_x  * p[tcx + tcy]);
-			
+
 			if (dinfo->num_components != 1) {
 				q[tx + ty + 1] = one_minus_y *
 				    (one_minus_x * p[tfx + tfy + 1] +
@@ -260,7 +260,7 @@ resize_bilinear(struct jpeg_decompress_struct *dinfo,
 				    fraction_y * (one_minus_x *
 				    p[tfx + tcy + 1] + fraction_x *
 				    p[tcx + tcy + 1]);
-				
+
 				q[tx + ty + 2] = one_minus_y *
 				    (one_minus_x * p[tfx + tfy + 2] +
 				    fraction_x * p[tcx + tfy + 2]) +
@@ -270,6 +270,6 @@ resize_bilinear(struct jpeg_decompress_struct *dinfo,
 			}
 		}
 	}
-	
+
 	return (0);
 }

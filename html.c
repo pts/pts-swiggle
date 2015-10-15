@@ -3,7 +3,7 @@
  *
  * This module is responsible for HTML output.
  *
- * Copyright (c) 2003 
+ * Copyright (c) 2003
  *  Lukas Ertl <l.ertl@univie.ac.at>.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,7 +34,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * 
+ *
  * $Id: html.c,v 1.10 2007/01/14 12:03:36 le Exp $
  *
  */
@@ -59,7 +59,7 @@ extern char	*progname;
  * Creates one html page per image given in the argument "imglist", which
  * has "imgcount" members, in the directory "dir".
  */
-void 
+void
 create_html(char *dir, struct imginfo *imglist, int imgcount)
 {
 	char final[MAXPATHLEN], tmp[MAXPATHLEN];
@@ -67,7 +67,7 @@ create_html(char *dir, struct imginfo *imglist, int imgcount)
 	FILE *html;
 
 	offset = 1; /* Needed for correct link back to thumbnail index page. */
-	
+
 	for (x = 0; x < imgcount; x++) {
 		sprintf(final, "%s/%s.html", dir, imglist[x].filename);
 		sprintf(tmp, "%s.tmp", final);
@@ -76,7 +76,7 @@ create_html(char *dir, struct imginfo *imglist, int imgcount)
 			    tmp, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
 		fprintf(html, "<html>\n"
 		    "<head>\n"
 		    "<title>%s: %s</title>\n"
@@ -91,29 +91,29 @@ create_html(char *dir, struct imginfo *imglist, int imgcount)
 		    "width=\"%d\" height=\"%d\" alt=\"%s\"></a>"
 		    "<br />\n<b><em>%s</em></b>\n"
 		    "</td></tr>\n<tr><td width=\"33%%\" align=\"center\" "
-		    "valign=\"top\">\n", 
+		    "valign=\"top\">\n",
 		    albumdesc,
-		    imglist[x].filename, 
+		    imglist[x].filename,
 		    imglist[x].filename,
 		    imglist[x].filename,
 		    imglist[x].scalewidth,
 		    imglist[x].scaleheight,
-		    imglist[x].filename, 
+		    imglist[x].filename,
 		    imglist[x].description);
-		
+
 		/* Generate link with thumbnail to previous image. */
 		if (x > 0) {
 			fprintf(html, "<a href=\"%s.html\"><img "
 			    "src=\".thumbs/%s\" border=\"0\" width=\"%d\" "
 			    "height=\"%d\" alt=\"%s\"><br>"
-			    "<small>previous image</small></a>", 
-			    imglist[x-1].filename, 
-			    imglist[x-1].filename, 
-			    imglist[x-1].thumbwidth, 
-			    imglist[x-1].thumbheight, 
+			    "<small>previous image</small></a>",
+			    imglist[x-1].filename,
+			    imglist[x-1].filename,
+			    imglist[x-1].thumbwidth,
+			    imglist[x-1].thumbheight,
 			    imglist[x-1].filename);
 		}
-		
+
 		fprintf(html, "</td>\n<td width=\"34%%\" align=\"center\">\n"
 		    "<small><a href=\"%s\">Original size (%d x %d, %d KB)</a>"
 		    "</small>\n<p>\n",
@@ -121,9 +121,9 @@ create_html(char *dir, struct imginfo *imglist, int imgcount)
 		    imglist[x].width,
 		    imglist[x].height,
 		    (int) (imglist[x].filesize/1024));
-		
+
 		fprintf(html, "<table width=\"100%%\" border=\"1\">\n");
-		
+
 		if (imglist[x].datetime != NULL) {
 			fprintf(html, "<tr>\n<td><small>Taken:</small></td>"
 			    "<td><small>%s</small></td>\n</tr>\n",
@@ -149,9 +149,9 @@ create_html(char *dir, struct imginfo *imglist, int imgcount)
 			    "<td><small>%s</small></td>\n</tr>\n",
 			    imglist[x].model);
 		}
-		
+
 		fprintf(html, "</table>\n<p>\n<small>\n");
-		
+
 		if (offset == 1) {
 			fprintf(html, "<a href=\"index.html\">"
 			    "Back to thumbnails</a>\n");
@@ -159,10 +159,10 @@ create_html(char *dir, struct imginfo *imglist, int imgcount)
 			fprintf(html, "<a href=\"index%d.html\">"
 			    "Back to thumbnails</a>\n", offset);
 		}
-		
+
 		fprintf(html, "</small>\n</td>\n<td width=\"33%%\" "
 		    "align=\"center\" valign=\"top\">");
-		
+
 		/* Generate link with thumbnail to next image. */
 		if (x + 1 < imgcount) {
 			fprintf(html, "<a href=\"%s.html\"><img "
@@ -172,56 +172,56 @@ create_html(char *dir, struct imginfo *imglist, int imgcount)
 			    imglist[x+1].filename,
 			    imglist[x+1].filename,
 			    imglist[x+1].thumbwidth,
-			    imglist[x+1].thumbheight, 
+			    imglist[x+1].thumbheight,
 			    imglist[x+1].filename);
 		}
-		
+
 		fprintf(html, "</td>\n</tr>\n</table>\n%s</body></html>",
 		    "generated");
-		
+
 		if (fclose(html) == EOF) {
 			fprintf(stderr, "%s: can't fclose(%s): %s\n", progname,
 			    tmp, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
 		if (rename(tmp, final)) {
 			fprintf(stderr, "%s: can't rename(%s, %s): %s\n",
 			    progname, tmp, final, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
 		if (x % MAX_PER_PAGE == MAX_PER_PAGE-1)
 			offset++;
 	}
 }
 
 /*
- * Creates one or more thumbnail index html pages in the directory 
+ * Creates one or more thumbnail index html pages in the directory
  * given in the parameter "dir" from the list of images contained
  * in the parameter "imglist", which has "imgcount" members.
  * Returns the number of thumbnail index pages created.
  */
-int 
+int
 create_thumbindex(char *dir, struct imginfo *imglist, int imgcount)
 {
 	char *desc, final[MAXPATHLEN], tmp[MAXPATHLEN];
 	int pages, offset, x, y;
 	FILE *html;
-	
+
 	pages = (int) (imgcount / MAX_PER_PAGE);
 	if (imgcount % MAX_PER_PAGE != 0)
 		pages++;
-	
+
 	desc = albumdesc != NULL ? albumdesc : defaultdesc;
-	
+
 	/* offset defines which index page we are working on. */
 	for (offset = 1; offset <= pages; offset++) {
 		if (offset == 1)
 			sprintf(final, "%s/index.html", dir);
 		else
 			sprintf(final, "%s/index%d.html", dir, offset);
-		
+
 		sprintf(tmp, "%s.tmp", final);
 		/*
 		 * x and y are indices into imglist. x is the image we start
@@ -233,13 +233,13 @@ create_thumbindex(char *dir, struct imginfo *imglist, int imgcount)
 		y = (offset * MAX_PER_PAGE > imgcount)
 		    ? imgcount
 		    : x + MAX_PER_PAGE;
-		
+
 		if ((html = fopen(tmp, "w")) == NULL) {
 			fprintf(stderr, "%s: can't fopen(%s): %s\n", progname,
 			    tmp, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
 		fprintf(html, "<html>\n<head>\n<title>%s / %d</title>\n"
 		    "<link rel=\"stylesheet\" type=\"text/css\" "
 		    "href=\"../swiggle.css\" />\n"
@@ -247,7 +247,7 @@ create_thumbindex(char *dir, struct imginfo *imglist, int imgcount)
 		    "<h1 align=\"center\">%s / %d</h1>\n"
 		    "<table width=\"100%%\" border=\"0\">\n<tr>\n"
 		    "<th width=\"33%%\"><small>\n", desc, offset, desc, offset);
-		
+
 		/*
 		 * Generate "previous pictures" link depending on current
 		 * offset.
@@ -259,70 +259,70 @@ create_thumbindex(char *dir, struct imginfo *imglist, int imgcount)
 			fprintf(html, "<a href=\"index%d.html\">"
 			    "previous %d pictures</a>\n", offset - 1,
 			    MAX_PER_PAGE);
-		    
+
 		fprintf(html, "</small></th>\n<th width=\"34%%\"><small>\n"
 		    "pictures %d - %d of %d\n</small></th>\n"
 		    "<th width=\"33%%\"><small>\n", x+1, y, imgcount);
-		
+
 		/* Generate "next pictures" link depending on images left. */
 		if (offset * MAX_PER_PAGE < imgcount) {
 			fprintf(html, "<a href=\"index%d.html\">next ",
-			    offset + 1); 
-			
+			    offset + 1);
+
 			if (imgcount - offset * MAX_PER_PAGE == 1)
 				fprintf(html, "picture</a>");
 			else
-				fprintf(html, "%d pictures</a>", 
-				    ((offset + 1) * MAX_PER_PAGE > imgcount) 
-				    ? imgcount - offset * MAX_PER_PAGE 
+				fprintf(html, "%d pictures</a>",
+				    ((offset + 1) * MAX_PER_PAGE > imgcount)
+				    ? imgcount - offset * MAX_PER_PAGE
 				    : MAX_PER_PAGE );
 		}
-		
+
 		fprintf(html, "</small></th>\n</tr>\n</table>\n<p>\n"
 		    "<table width=\"100%%\" border=\"0\">\n");
-		
+
 		/* Now generate an entry for every image on this page. */
 		while (x < y) {
 			if (x % cols == 0)
 				fprintf(html, "<tr>\n");
-			
+
 			fprintf(html, "<td align=\"center\">\n"
 			    "<a href=\"%s.html\"><img src=\".thumbs/%s\" "
 			    "border=\"0\" alt=\"%s\" width=\"%d\" "
 			    "height=\"%d\"></a><br>\n<small>%d x %d, %d KB"
-			    "</small>\n<br><br>\n</td>\n", 
-			    imglist[x].filename, 
-			    imglist[x].filename, 
-			    imglist[x].filename, 
-			    imglist[x].thumbwidth, 
+			    "</small>\n<br><br>\n</td>\n",
+			    imglist[x].filename,
+			    imglist[x].filename,
+			    imglist[x].filename,
+			    imglist[x].thumbwidth,
 			    imglist[x].thumbheight,
 			    imglist[x].width,
 			    imglist[x].height,
 			    (int)(imglist[x].filesize / 1024));
-			
+
 			if ((x % cols == cols - 1) || (x + 1 == imgcount))
 				fprintf(html, "</tr>\n");
-			
+
 			x++;
 		}
-		
+
 		fprintf(html, "</table>\n<p align=\"center\">\n"
 		    "<a href=\"../index.html\">"
 		    "<small>Back to gallery index</small></a>\n</p>\n%s</body>"
 		    "\n</html>\n", "generated");
-		
+
 		if (fclose(html) == EOF) {
 			fprintf(stderr, "%s: can't fclose(%s): %s\n", progname,
 			    tmp, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
-		
+
 		if (rename(tmp, final)) {
 			fprintf(stderr, "%s: can't rename(%s, %s): %s\n",
 			    progname, tmp, final, strerror(errno));
 			exit(EXIT_FAILURE);
 		}
 	}
-	
+
 	return (offset - 1);
 }

@@ -7,7 +7,7 @@ shell script ./c.sh on Unix.
 
 Example usage to generate thumbnails of at most 768 pixels high:
 
-  pts-swiggle -H 768 .  
+  pts-swiggle -H 768 .
 
 pts-swiggle is written in C, and its source code is based on swiggle
 (http://homepage.univie.ac.at/l.ertl/swiggle/).
@@ -22,12 +22,12 @@ Homepage: <http://mailbox.univie.ac.at/~le/swiggle/>
 
 * About swiggle
 ---------------
-swiggle is a small command line tool that generates HTML pages, including 
-thumbnail indexes, for given images (a so called "web gallery"). It's 
-intended to be easy to use, and since it is written in C, it's quite 
+swiggle is a small command line tool that generates HTML pages, including
+thumbnail indexes, for given images (a so called "web gallery"). It's
+intended to be easy to use, and since it is written in C, it's quite
 speedy. It uses libjpeg for decompression and compression of images,
-libexif for getting EXIF information contained in the images, and it 
-caches scaled images so that subsequent runs don't need to scale images 
+libexif for getting EXIF information contained in the images, and it
+caches scaled images so that subsequent runs don't need to scale images
 again and are faster. Of course, the original images aren't changed.
 
 Currently, it only processes JPEG images, and it's thought to be used
@@ -55,7 +55,7 @@ any arguments to get the list of available options.
 
 * Example usage
 ---------------
-Start with an empty directory, for example ~/gallery. Now create one 
+Start with an empty directory, for example ~/gallery. Now create one
 or more subdirectories in ~/gallery and copy your desired images into
 each of the subdirectories. You might end up with a directory structure
 like this one:
