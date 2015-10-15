@@ -225,6 +225,7 @@ main(int argc, char **argv)
 static void process_dir(char *dir) {
 	struct imginfo *imglist;
 	unsigned imgcount;
+	unsigned imgcapacity;
 	char *i, *p;
 	unsigned dir_size;
 	struct dirent *dent;
@@ -240,6 +241,7 @@ static void process_dir(char *dir) {
 	dir_size = strlen(dir);
 	imglist = NULL;
 	imgcount = 0;
+	imgcapacity = 0;
 	while ((dent = readdir(thisdir)) != NULL) {
 	        /* We only want regular files that have a filename suffix. */
 		if ((p = strrchr(dent->d_name, '.')) == NULL) continue;
@@ -258,8 +260,10 @@ static void process_dir(char *dir) {
 			free(i);
 			continue;
 		}
-		/* TODO(pts): Do exponential reallocation. */
-		check_alloc(imglist = realloc(imglist, (imgcount + 1) * sizeof(struct imginfo)));
+		if (imgcount == imgcapacity) {
+			imgcapacity = imgcapacity < 16 ? 16 : imgcapacity << 1;
+			check_alloc(imglist = realloc(imglist, imgcapacity * sizeof(struct imginfo)));
+		}
 		create_image(i, &imglist[imgcount++]);
 	}
 
