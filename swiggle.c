@@ -221,6 +221,14 @@ static int filename_cmp(const void *a, const void *b) {
 	return strcmp(ia->filename, ib->filename);
 }
 
+static void check_alloc(const void *p) {
+	if (!p) {
+		const char msg[] = "pts-swiggle: Out of memory, aborting.\n";
+		(void)-write(2, msg, sizeof(msg) - 1);
+		abort();
+	}
+}
+
 /*
  * Opens the directory given in parameter "dir" and reads the filenames
  * of all .jpg files, stores them in a list and initiates the creation
@@ -268,18 +276,10 @@ processdir(char *dir)
 			continue;
 
 		/* Allocate memory for this image and store it in the list. */
-		if ((i = strdup(dent->d_name)) == NULL) {
-			fprintf(stderr, "%s: can't strdup(%s): %s\n", progname,
-			    dent->d_name, strerror(errno));
-			exit(EXIT_FAILURE);
-		}
+		
+		check_alloc(i = strdup(dent->d_name));
 		/* TODO(pts): Do exponential reallocation. */
-		if ((imglist = realloc(imglist, (imgcount+1) *
-		    sizeof(struct imginfo))) == NULL) {
-			fprintf(stderr, "%s: can't realloc: %s\n", progname,
-			    strerror(errno));
-			exit(EXIT_FAILURE);
-		}
+		check_alloc(imglist = realloc(imglist, (imgcount + 1) * sizeof(struct imginfo)));
 		img = &imglist[imgcount++];
 		img->filename = i;
 		/* TODO(pts): Why are these needed? */
@@ -322,21 +322,21 @@ processdir(char *dir)
 
 /* TODO(pts): Remove exif support completely. */
 void delete_image(struct imginfo *img) {
-  free(img->filename); img->filename = NULL;
-  free(img->description); img->description = NULL;
-  free(img->model); img->model = NULL;
-  free(img->datetime); img->datetime = NULL;
-  free(img->exposuretime); img->exposuretime = NULL;
-  free(img->flash); img->flash = NULL;
-  free(img->aperture); img->aperture = NULL;
+	free(img->filename); img->filename = NULL;
+	free(img->description); img->description = NULL;
+	free(img->model); img->model = NULL;
+	free(img->datetime); img->datetime = NULL;
+	free(img->exposuretime); img->exposuretime = NULL;
+	free(img->flash); img->flash = NULL;
+	free(img->aperture); img->aperture = NULL;
 }
 
 void delete_images(struct imginfo *imglist, int imgcount) {
-  int i;
-  for (i = 0; i < imgcount; ++i) {
-    delete_image(imglist + i);
-  }
-  free(imglist);
+	int i;
+	for (i = 0; i < imgcount; ++i) {
+		delete_image(imglist + i);
+	}
+	free(imglist);
 }
 
 /*
@@ -506,13 +506,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 
 			jpeg_start_decompress(&dinfo);
 			row_width = dinfo.output_width * dinfo.num_components;
-			p = malloc(row_width * dinfo.output_height *
-			    SIZE_UCHAR);
-			if (p == NULL) {
-				fprintf(stderr, "%s: can't malloc: %s\n",
-				    progname, strerror(errno));
-				exit(EXIT_FAILURE);
-			}
+			check_alloc(p = malloc(row_width * dinfo.output_height * SIZE_UCHAR));
 			samp = (*dinfo.mem->alloc_sarray)
 			    ((j_common_ptr)&dinfo, JPOOL_IMAGE, row_width, 1);
 
@@ -537,13 +531,7 @@ create_images(char *dir, struct imginfo *imglist, int imgcount)
 			jpeg_set_defaults(&cinfo);
 			jpeg_set_quality(&cinfo, 50, FALSE);  /**** pts ****/
 
-			o = malloc(cinfo.image_width * cinfo.image_height *
-			    cinfo.input_components * SIZE_UCHAR);
-			if (o == NULL) {
-				fprintf(stderr, "%s: can't malloc: %s\n",
-				    progname, strerror(errno));
-				exit(EXIT_FAILURE);
-			}
+			check_alloc(o = malloc(cinfo.image_width * cinfo.image_height * cinfo.input_components * SIZE_UCHAR));
 
 			/* Resize the image. */
 			if (resize_func(&dinfo, &cinfo, p, &o)) {
@@ -656,11 +644,7 @@ read_img_desc(char *dir, struct imgdesc **id)
 		while (isspace(*w))
 			w++;
 
-		if ((d = strdup(w)) == NULL) {
-			fprintf(stderr, "%s: can't strdup(%s): %s\n",
-			    progname, w, strerror(errno));
-			exit(EXIT_FAILURE);
-		}
+		check_alloc(d = strdup(w));
 
 		/* We have found the album description. */
 		if (strcmp(p, ".") == 0) {
@@ -668,19 +652,10 @@ read_img_desc(char *dir, struct imgdesc **id)
 			continue;
 		}
 
-		if ((f = strdup(p)) == NULL) {
-			fprintf(stderr, "%s: can't strdup(%s): %s\n", progname,
-			    p, strerror(errno));
-			exit(EXIT_FAILURE);
-		}
+		check_alloc(f = strdup(p));
 
-		i = realloc(i, (n + 1) * sizeof(struct imgdesc));
-		if (i == NULL) {
-			fprintf(stderr, "%s: can't realloc: %s\n", progname,
-			    strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-
+		/* TODO(pts): Do exponential reallocation. */
+		check_alloc(i = realloc(i, (n + 1) * sizeof(struct imgdesc)));
 		i[n].filename = f;
 		i[n].desc = d;
 
@@ -700,15 +675,16 @@ get_img_desc(struct imgdesc *id, int idcount, char *filename)
 {
 	int i;
 
-	if (id == NULL)
-		return strdup(filename);
-
-	for (i = 0; i < idcount; i++) {
-		if (strcmp(id[i].filename, filename) == 0)
-			return strdup(id[i].desc);
+	if (id != NULL) {
+		for (i = 0; i < idcount; i++) {
+			if (strcmp(id[i].filename, filename) == 0) {
+				filename = id[i].desc;
+				break;
+			}
+		}
 	}
-
-	return strdup(filename);
+	check_alloc(filename = strdup(filename));
+	return filename;
 }
 
 /*
@@ -726,12 +702,7 @@ get_exif_data(ExifData *ed, ExifTag t)
 			ee = exif_content_get_entry(ed->ifd[i], t);
 			if (ee && exif_entry_get_value(ee, p, EXIFSIZ)
 			    != NULL) {
-				if ((x = strdup(p)) == NULL) {
-					fprintf(stderr, "%s: can't strdup(%s): "
-					    "%s\n", progname, p,
-					    strerror(errno));
-					exit(EXIT_FAILURE);
-				}
+				check_alloc(x = strdup(p));
 				return (x);
 			}
 		}
