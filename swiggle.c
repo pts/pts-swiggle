@@ -216,12 +216,6 @@ main(int argc, char **argv)
 	return exit_code;
 }
 
-static int filename_cmp(const void *a, const void *b) {
-	struct imginfo *ia = (struct imginfo*)a;
-	struct imginfo *ib = (struct imginfo*)b;
-	return strcmp(ia->filename, ib->filename);
-}
-
 static void check_alloc(const void *p) {
 	if (!p) {
 		const char msg[] = "pts-swiggle: Out of memory, aborting.\n";
@@ -301,16 +295,16 @@ processdir(char *dir)
 		exit(EXIT_FAILURE);
 	}
 
-	/* Put the images to increasing order for deterministic processing. */
-	qsort(imglist, imgcount, sizeof imglist[0], filename_cmp);
-
 	if (imgcount) {
+		/* Sort the list according to desired sorting function. */
+		qsort(imglist, imgcount, sizeof(struct imginfo), sort_by_filename);
 		create_images(imglist, imgcount);
 
-		/* Sort the list according to desired sorting function. */
-		qsort(imglist, imgcount, sizeof(struct imginfo), sort_func);
 
 #if 0  /**** pts ****/
+		/* TODO(pts): Remove these, and sort_func? */
+		/* Sort the list according to desired sorting function. */
+		qsort(imglist, imgcount, sizeof(struct imginfo), sort_func);
 		create_html(dir, imglist, imgcount);
 		x = create_thumbindex(dir, imglist, imgcount);
 		printf("%d thumbnail index pages created.\n", x);
@@ -629,12 +623,10 @@ get_exif_data(ExifData *ed, ExifTag t)
 int
 sort_by_filename(const void *a, const void *b)
 {
-	const struct imginfo *x, *y;
-
-	x = a;
-	y = b;
-
-	return (strcoll(x->filename, y->filename));
+	struct imginfo *ia = (struct imginfo*)a;
+	struct imginfo *ib = (struct imginfo*)b;
+	/* We could use strcoll instead of strcmp for locale-compatible sorting, but let's not go that way. */
+	return strcmp(ia->filename, ib->filename);
 }
 
 int
