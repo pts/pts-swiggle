@@ -62,48 +62,29 @@
 
 #define	SWIGGLE_VERSION	"0.4-pts"
 
-/* TODO(pts): Remove unused fields. */
-struct imginfo {
-	char	*filename;
-	int	filesize;
-	time_t	mtime;
-	int	width;
-	int	height;
-	int	scalewidth;
-	int	scaleheight;
-	int	thumbwidth;
-	int	thumbheight;
-};
-
-struct imgdesc {
-	char	*filename;
-	char	*desc;
-};
-
 static struct {
 	char *progname;
 	int scaleheight;
-	int thumbheight;
 	int force;
 	int bilinear;
-} g_flags = { "", 480, 96, 0, 0 };
+	int exit_code;
+} g_flags = { "", 480, 0, 0, EXIT_SUCCESS };
 
 /*
  * Function declarations.
  */
 static void process_dir(char *);
-static void process_images(struct imginfo *, int);
 static int check_cache(char *, struct stat *);
-static void create_images(struct imginfo *, int);
-static void delete_image(struct imginfo *);
-static void delete_images(struct imginfo *, int);
+static void create_thumbnail(char *);
 static int sort_by_filename(const void *, const void *);
 static void usage(void);
 static void version(void);
-static int resize_bicubic(struct jpeg_decompress_struct *,
-    struct jpeg_compress_struct *, const unsigned char *, unsigned char **);
-static int resize_bilinear(struct jpeg_decompress_struct *,
-    struct jpeg_compress_struct *, const unsigned char *, unsigned char **);
+static void resize_bicubic(
+    struct jpeg_decompress_struct *,
+    unsigned, unsigned, const unsigned char *, unsigned char *);
+static void resize_bilinear(
+    struct jpeg_decompress_struct *,
+    unsigned, unsigned, const unsigned char *, unsigned char *);
 
 static void check_alloc(const void *p) {
 	if (!p) {
@@ -111,10 +92,6 @@ static void check_alloc(const void *p) {
 		(void)-write(2, msg, sizeof(msg) - 1);
 		abort();
 	}
-}
-
-static void create_image(char *filename_take, struct imginfo *img) {
-	img->filename = filename_take;
 }
 
 /*
@@ -127,7 +104,6 @@ main(int argc, char **argv)
 {
 	char *eptr;
 	int i;
-	int exit_code;
 	struct stat sb;
 
 	g_flags.progname = argv[0];
@@ -138,13 +114,7 @@ main(int argc, char **argv)
 			break;
 		case 'd':  /* defaultdesc, ignored */
 			break;
-		case 'h':
-			g_flags.thumbheight = (int) strtol(optarg, &eptr, 10);
-			if (eptr == optarg || *eptr != '\0') {
-				fprintf(stderr, "%s: invalid argument '-h "
-				    "%s'\n", g_flags.progname, optarg);
-				usage();
-			}
+		case 'h':  /* thumbheight, ignored */
 			break;
 		case 'H':
 			g_flags.scaleheight = (int) strtol(optarg, &eptr, 10);
@@ -152,6 +122,7 @@ main(int argc, char **argv)
 				fprintf(stderr, "%s: invalid argument '-H "
 				    "%s'\n", g_flags.progname, optarg);
 				usage();
+				exit(EXIT_FAILURE);
 			}
 			break;
 		case 'r':  /* rows, ignored */
@@ -170,17 +141,20 @@ main(int argc, char **argv)
 			version();
 			break;
 		case '?':
+			usage();
+			exit(EXIT_SUCCESS);
 		default:
 			usage();
+			exit(EXIT_FAILURE);
 		}
 	}
 
 	argc -= optind;
 	argv += optind;
-	if (argc < 1)
+	if (argc < 1) {
 		usage();
-
-	exit_code = EXIT_SUCCESS;
+		exit(EXIT_FAILURE);
+	}
 
 	/* Put the inputs to increasing order for deterministic processing. */
 	qsort(argv, argc, sizeof argv[0],
@@ -190,7 +164,7 @@ main(int argc, char **argv)
 		if (stat(argv[i], &sb)) {
 			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname, argv[i],
 			    strerror(errno));
-			exit_code = EXIT_FAILURE;
+			g_flags.exit_code = EXIT_FAILURE;
 			continue;
 		}
 
@@ -199,21 +173,16 @@ main(int argc, char **argv)
 				argv[i][strlen(argv[i])-1] = '\0';
 			process_dir(argv[i]);
 		} else if (S_ISREG(sb.st_mode)) {
-			struct imginfo img;
-			char *fn;
-			check_alloc(fn = strdup(argv[i]));
-			create_image(fn, &img);
-			process_images(&img, 1);
-			delete_image(&img);
+			create_thumbnail(argv[i]);
 		} else {
 			fprintf(stderr, "%s: not a file or directory: %s\n", g_flags.progname,
 			    argv[i]);
-			exit_code = EXIT_FAILURE;
+			g_flags.exit_code = EXIT_FAILURE;
 		}
 
 	}
 
-	return exit_code;
+	return g_flags.exit_code;
 }
 
 /*
@@ -223,10 +192,11 @@ main(int argc, char **argv)
  * found in this directory.
  */
 static void process_dir(char *dir) {
-	struct imginfo *imglist;
+	char **imglist;
 	unsigned imgcount;
 	unsigned imgcapacity;
-	char *i, *p;
+	unsigned i;
+	char *fn, *p;
 	unsigned dir_size;
 	struct dirent *dent;
 	struct stat sb;
@@ -235,7 +205,8 @@ static void process_dir(char *dir) {
 	if ((thisdir = opendir(dir)) == NULL) {
 		fprintf(stderr, "%s: can't opendir(%s): %s\n", g_flags.progname, dir,
 		    strerror(errno));
-		exit(EXIT_FAILURE);
+		g_flags.exit_code = EXIT_FAILURE;
+		return;
 	}
 
 	dir_size = strlen(dir);
@@ -249,70 +220,48 @@ static void process_dir(char *dir) {
 		/* We currently only handle .jpg files. */
 		/* TODO(pts): Remove this `if' */
 		if (strcasecmp(p, "jpg" ) != 0 && strcasecmp(p, "jpeg") != 0) continue;
-		check_alloc(i = malloc(dir_size + strlen(dent->d_name) + 2));
-		sprintf(i, "%s/%s", dir, dent->d_name);
+		check_alloc(fn = malloc(dir_size + strlen(dent->d_name) + 2));
+		sprintf(fn, "%s/%s", dir, dent->d_name);
 		if (
 #ifdef DT_UNKNOWN
 		    dent->d_type == DT_REG ? 0 :
 		    dent->d_type != DT_UNKNOWN ? 1 :
 #endif
-		    (stat(i, &sb) == 0 && !S_ISREG(sb.st_mode))) {
-			free(i);
+		    (stat(fn, &sb) == 0 && !S_ISREG(sb.st_mode))) {
+			free(fn);
 			continue;
 		}
 		if (imgcount == imgcapacity) {
 			imgcapacity = imgcapacity < 16 ? 16 : imgcapacity << 1;
-			check_alloc(imglist = realloc(imglist, imgcapacity * sizeof(struct imginfo)));
+			check_alloc(imglist = realloc(imglist, imgcapacity * sizeof(*imglist)));
 		}
-		create_image(i, &imglist[imgcount++]);
+		imglist[imgcount++] = fn;  /* Takes ownership. */
 	}
 
 	if (closedir(thisdir)) {
 		fprintf(stderr, "%s: error on closedir(%s): %s", g_flags.progname, dir,
 		    strerror(errno));
-		exit(EXIT_FAILURE);
+		g_flags.exit_code = EXIT_FAILURE;
 	}
-	process_images(imglist, imgcount);
-	delete_images(imglist, imgcount);
-	printf("%d image%s processed in dir: %s\n", imgcount,
-	    imgcount != 1 ? "s" : "", dir);
-}
-
-static void process_images(struct imginfo *imglist, int imgcount) {
-	if (!imgcount) return;
 	/* Sort the list according to desired sorting function. */
-	qsort(imglist, imgcount, sizeof(struct imginfo), sort_by_filename);
-	create_images(imglist, imgcount);
-}
-
-static void delete_image(struct imginfo *img) {
-	free(img->filename); img->filename = NULL;
-}
-
-static void delete_images(struct imginfo *imglist, int imgcount) {
-	int i;
+	qsort(imglist, imgcount, sizeof(*imglist), sort_by_filename);
 	for (i = 0; i < imgcount; ++i) {
-		delete_image(imglist + i);
+		create_thumbnail(imglist[i]);
+	}
+	for (i = 0; i < imgcount; ++i) {
+		free(imglist[i]);
 	}
 	free(imglist);
+	printf("%d image%s processed in dir: %s\n", imgcount, imgcount != 1 ? "s" : "", dir);
 }
 
-/*
- * Creates thumbnails and scaled images (if they aren't already cached)
- * for each image given in parameter "imglist", which has "imgcount"
- * members, in the subdirs '.scaled' and '.thumbs' of the directory given
- * in parameter "dir".
- * Also fills in various image information into each member of "imglist".
- */
-static void
-create_images(struct imginfo *imglist, int imgcount)
-{
-	char final[MAXPATHLEN], tmp[MAXPATHLEN], *ori;
+static void create_thumbnail(char *filename) {
+	/* TODO(pts): Don't use MAXPATHLEN. */
+	char final[MAXPATHLEN], tmp[MAXPATHLEN];
 	double factor, ratio;
 	FILE *infile, *outfile;
-	int cached, i, n, ori_in_mem, row_width;
-	int (*resize_func) ();
-	struct imgdesc *id;
+	unsigned n, row_width;
+	void (*resize_func)(struct jpeg_decompress_struct *dinfo, unsigned, unsigned, const unsigned char *p, unsigned char *o);
 	struct stat sb;
 	struct jpeg_decompress_struct dinfo;
 	struct jpeg_compress_struct cinfo;
@@ -320,182 +269,156 @@ create_images(struct imginfo *imglist, int imgcount)
 	unsigned char *o, *p;
 	JSAMPARRAY samp;
 	JSAMPROW row_pointer[1];
+	unsigned img_width;
+	unsigned img_height;
+	unsigned img_scalewidth;
+	unsigned img_scaleheight;
 
-	id = NULL;
-
+	/* TODO(pts): Preinit these outside the loop. */
+	/* TODO(pts): Don't abort the process on a JPEG error. */
 	dinfo.err = jpeg_std_error(&jerr);
 	cinfo.err = jpeg_std_error(&jerr);
-
 	if (g_flags.bilinear)
 		resize_func = resize_bilinear;
 	else
 		resize_func = resize_bicubic;
 
-	for (i = 0; i < imgcount; i++) {
-		p = o = NULL;
-		ori_in_mem = 0;
-		ori = imglist[i].filename;
+	p = o = NULL;
 
-		printf("Image %s\n", ori);
-
-		if (stat(ori, &sb)) {
-			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
-			    ori, strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-
-		{  /* Generate thumbnail filename. */
-			const char* r = ori + strlen(ori);
-			const char* p = r;
-			size_t prefixlen;
-			if (r - ori >= 7 && 0 == memcmp(r - 7, ".th.jpg", 7))
-				continue;
-
-			/* Replace image extension with .th.jpg, save result to th_ori */
-			while (p != ori && p[-1] != '/' && p[-1] != '.') {
-				--p;
-			}
-			prefixlen = (p != ori && p[-1] == '.') ? p - ori - 1 : r - ori;
-			memcpy(final, ori, prefixlen);
-			strcpy(final + prefixlen, ".th.jpg");
-		}
-
-		/*
-		 * Check if the cached image exists and is newer than the
-		 * original.
-		 */
-		cached = !g_flags.force && check_cache(final, &sb);
-
-		/*
-		 * Open the file and get some basic image information.
-		 */
-		if ((infile = fopen(ori, "rb")) == NULL) {
-			fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname,
-			    ori, strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-		jpeg_create_decompress(&dinfo);
-		jpeg_stdio_src(&dinfo, infile);
-		(void)jpeg_read_header(&dinfo, FALSE);  /* TODO(pts): don't abort the program on failure */
-
-		imglist[i].filesize = sb.st_size;
-		imglist[i].mtime = sb.st_mtime;
-		imglist[i].width = dinfo.image_width;
-		imglist[i].height = dinfo.image_height;
-
-		/* ratio needed to scale image correctly. */
-		ratio = ((double)imglist[i].width / (double)imglist[i].height);
-		imglist[i].scaleheight = g_flags.scaleheight;
-		imglist[i].scalewidth = (int)((double)imglist[i].scaleheight *
-		    ratio + 0.5);
-		/* TODO(pts): Fix too large width. */
-		if (!(imglist[i].scaleheight < imglist[i].height ||
-		      imglist[i].scalewidth < imglist[i].width)) {
-			jpeg_destroy_decompress(&dinfo);
-			fclose(infile);
-			continue;
-		}
-
-		imglist[i].thumbheight = g_flags.thumbheight;
-		imglist[i].thumbwidth = (int)((double)imglist[i].thumbheight *
-		    ratio + 0.5);
-
-		/*
-		 * If the image is not cached, we need to read it in,
-		 * resize it, and write it out.
-		 */
-		if (!cached) {
-			sprintf(tmp, "%s.tmp", final);
-			if ((outfile = fopen(tmp, "wb")) == NULL) {
-				fprintf(stderr, "%s: can't fopen(%s): %s\n",
-				    g_flags.progname, tmp, strerror(errno));
-				exit(EXIT_FAILURE);
-			}
-
-			/*
-			 * Use libjpeg's handy feature to downscale the
-			 * original on the fly while reading it in.
-			 */
-			factor = (double)dinfo.image_width /
-			    (double)imglist[i].scalewidth;
-			if ((int) factor >= 8)
-				dinfo.scale_denom = 8;
-			else if ((int) factor >= 4)
-				dinfo.scale_denom = 4;
-			else if ((int) factor >= 2)
-				dinfo.scale_denom = 2;
-
-			jpeg_start_decompress(&dinfo);
-			row_width = dinfo.output_width * dinfo.num_components;
-			check_alloc(p = malloc(row_width * dinfo.output_height * sizeof(unsigned char)));
-			samp = (*dinfo.mem->alloc_sarray)
-			    ((j_common_ptr)&dinfo, JPOOL_IMAGE, row_width, 1);
-
-			/* Read the image into memory. */
-			n = 0;
-			while (dinfo.output_scanline < dinfo.output_height) {
-				jpeg_read_scanlines(&dinfo, samp, 1);
-				memcpy(&p[n*row_width], *samp, row_width);
-				n++;
-			}
-			jpeg_finish_decompress(&dinfo);
-
-			ori_in_mem = 1; /* The original is now in memory. */
-
-			/* Prepare the compression object. */
-			jpeg_create_compress(&cinfo);
-			jpeg_stdio_dest(&cinfo, outfile);
-			cinfo.image_width = imglist[i].scalewidth;
-			cinfo.image_height = imglist[i].scaleheight;
-			cinfo.input_components = dinfo.num_components;
-			cinfo.in_color_space = dinfo.out_color_space;
-			jpeg_set_defaults(&cinfo);
-			jpeg_set_quality(&cinfo, 50, FALSE);  /**** pts ****/
-
-			check_alloc(o = malloc(cinfo.image_width * cinfo.image_height * cinfo.input_components * sizeof(unsigned char)));
-
-			/* Resize the image. */
-			if (resize_func(&dinfo, &cinfo, p, &o)) {
-				fprintf(stderr, "%s: can't resize image '%s': "
-				    "%s\n", g_flags.progname, ori, strerror(errno));
-				exit(EXIT_FAILURE);
-			}
-
-			/* Write the image out. */
-			jpeg_start_compress(&cinfo, FALSE);
-			while (cinfo.next_scanline < cinfo.image_height) {
-				row_pointer[0] = &o[cinfo.input_components *
-				    cinfo.image_width * cinfo.next_scanline];
-				jpeg_write_scanlines(&cinfo, row_pointer, 1);
-				n++;
-			}
-			jpeg_finish_compress(&cinfo);
-			fclose(outfile);
-			jpeg_destroy_compress(&cinfo);
-
-			if (rename(tmp, final)) {
-				fprintf(stderr, "%s: can't rename(%s, %s): "
-				    "%s\n", g_flags.progname, tmp, final,
-				    strerror(errno));
-				exit(EXIT_FAILURE);
-			}
-		}
-
-		fclose(infile);
-		jpeg_destroy_decompress(&dinfo);
-
-		/*
-		 * If we have read the original, free any associated
-		 * ressources.
-		 */
-		if (ori_in_mem) {
-			free(o);
-			free(p);
-		}
+	printf("Image %s\n", filename);
+	if (stat(filename, &sb)) {
+		fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
+		    filename, strerror(errno));
+		g_flags.exit_code = EXIT_FAILURE;
+		return;
 	}
 
-	if (id != NULL)
-		free(id);
+	{  /* Generate thumbnail filename. */
+		const char* r = filename + strlen(filename);
+		const char* p = r;
+		size_t prefixlen;
+		if (r - filename >= 7 && 0 == memcmp(r - 7, ".th.jpg", 7))
+			return;  /* Already a thumbnail. */
+
+		/* Replace image extension with .th.jpg, save result to th_filename */
+		for (; p != filename && p[-1] != '/' && p[-1] != '.'; --p) {}
+		prefixlen = (p != filename && p[-1] == '.') ? p - filename - 1 : r - filename;
+		memcpy(final, filename, prefixlen);
+		strcpy(final + prefixlen, ".th.jpg");
+	}
+
+	/*
+	 * Check if the cached image exists and is newer than the
+	 * original.
+	 */
+	if (!g_flags.force && check_cache(final, &sb)) return;
+
+	/*
+	 * Open the file and get some basic image information.
+	 */
+	if ((infile = fopen(filename, "rb")) == NULL) {
+		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname,
+		    filename, strerror(errno));
+		g_flags.exit_code = EXIT_FAILURE;
+		return;
+	}
+	jpeg_create_decompress(&dinfo);
+	jpeg_stdio_src(&dinfo, infile);
+	(void)jpeg_read_header(&dinfo, FALSE);  /* TODO(pts): Don't abort the program on failure. */
+
+	img_width = dinfo.image_width;
+	img_height = dinfo.image_height;
+
+	/* ratio needed to scale image correctly. */
+	ratio = (double)img_width / (double)img_height;
+	img_scaleheight = g_flags.scaleheight;
+	img_scalewidth = (int)((double)img_scaleheight * ratio + 0.5);
+	/* TODO(pts): Fix too large width. */
+	if (!(img_scaleheight < img_height ||
+	      img_scalewidth < img_width)) {
+		jpeg_destroy_decompress(&dinfo);
+		fclose(infile);
+		return;
+	}
+
+	/*
+	 * If the image is not cached, we need to read it in,
+	 * resize it, and write it out.
+	 */
+	sprintf(tmp, "%s.tmp", final);
+	if ((outfile = fopen(tmp, "wb")) == NULL) {
+		fprintf(stderr, "%s: can't fopen(%s): %s\n",
+		    g_flags.progname, tmp, strerror(errno));
+		jpeg_destroy_decompress(&dinfo);
+		fclose(infile);
+		g_flags.exit_code = EXIT_FAILURE;
+		return;
+	}
+
+	/*
+	 * Use libjpeg's handy feature to downscale the
+	 * original on the fly while reading it in.
+	 */
+	factor = (double)img_width / (double)img_scalewidth;
+	if ((int) factor >= 8)
+		dinfo.scale_denom = 8;
+	else if ((int) factor >= 4)
+		dinfo.scale_denom = 4;
+	else if ((int) factor >= 2)
+		dinfo.scale_denom = 2;
+
+	jpeg_start_decompress(&dinfo);
+	row_width = dinfo.output_width * dinfo.num_components;
+	check_alloc(p = malloc(row_width * dinfo.output_height * sizeof(unsigned char)));
+	samp = (*dinfo.mem->alloc_sarray)
+	    ((j_common_ptr)&dinfo, JPOOL_IMAGE, row_width, 1);
+
+	/* Read the image into memory. */
+	n = 0;
+	while (dinfo.output_scanline < dinfo.output_height) {
+		jpeg_read_scanlines(&dinfo, samp, 1);
+		memcpy(&p[n*row_width], *samp, row_width);
+		n++;
+	}
+	jpeg_finish_decompress(&dinfo);
+	jpeg_destroy_decompress(&dinfo);
+	fclose(infile);
+
+	/* Resize the image. */
+	check_alloc(o = malloc(img_scalewidth * img_scaleheight * dinfo.num_components * sizeof(unsigned char)));
+	resize_func(&dinfo, img_scalewidth, img_scaleheight, p, o);
+	free(p);
+
+	/* Prepare the compression object. */
+	jpeg_create_compress(&cinfo);
+	jpeg_stdio_dest(&cinfo, outfile);
+	cinfo.image_width = img_scalewidth;
+	cinfo.image_height = img_scaleheight;
+	cinfo.input_components = dinfo.num_components;
+	cinfo.in_color_space = dinfo.out_color_space;
+	jpeg_set_defaults(&cinfo);
+	jpeg_set_quality(&cinfo, 50, FALSE);  /* TODO(pts): Make quality configurable. */
+
+	/* Write the image out. */
+	jpeg_start_compress(&cinfo, FALSE);
+	while (cinfo.next_scanline < cinfo.image_height) {
+		row_pointer[0] = &o[cinfo.input_components *
+		    cinfo.image_width * cinfo.next_scanline];
+		jpeg_write_scanlines(&cinfo, row_pointer, 1);
+	}
+	jpeg_finish_compress(&cinfo);
+	fclose(outfile);
+	jpeg_destroy_compress(&cinfo);
+	free(o);
+
+	if (rename(tmp, final)) {
+		fprintf(stderr, "%s: can't rename(%s, %s): "
+		    "%s\n", g_flags.progname, tmp, final,
+		    strerror(errno));
+		unlink(tmp);
+		g_flags.exit_code = EXIT_FAILURE;
+		return;
+	}
 }
 
 static int
@@ -508,9 +431,9 @@ check_cache(char *filename, struct stat *sb_ori)
 
 	if (stat(filename, &sb)) {
 		if (errno != ENOENT) {
-			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
+			fprintf(stderr, "%s: warning: can't stat(%s): %s\n", g_flags.progname,
 			    filename, strerror(errno));
-			exit(EXIT_FAILURE);
+			cached = 0;
 		} else {
 		    cached = 0;
 		}
@@ -526,10 +449,10 @@ check_cache(char *filename, struct stat *sb_ori)
 static int
 sort_by_filename(const void *a, const void *b)
 {
-	struct imginfo *ia = (struct imginfo*)a;
-	struct imginfo *ib = (struct imginfo*)b;
+	char **ia = (char**)a;
+	char **ib = (char**)b;
 	/* We could use strcoll instead of strcmp for locale-compatible sorting, but let's not go that way. */
-	return strcmp(ia->filename, ib->filename);
+	return strcmp(*ia, *ib);
 }
 
 static void
@@ -547,8 +470,7 @@ usage(void)
 	fprintf(stderr, "Available options:\n");
 	fprintf(stderr, "   -c <x> ... columns per thumbnail index page\n");
 	fprintf(stderr, "   -r <y> ... rows per thumbnail index page\n");
-	fprintf(stderr, "   -h <i> ... height of the thumbnails in pixel "
-	    "(default: %d)\n", g_flags.thumbheight);
+	fprintf(stderr, "   -h <i> ... height of the thumbnails in pixel\n");
 	fprintf(stderr, "   -H <j> ... height of the scaled images in pixel "
 	    "(default: %d)\n", g_flags.scaleheight);
 	fprintf(stderr, "   -f     ... force rebuild of everything; ignore "
@@ -573,55 +495,40 @@ usage(void)
  * the result in "o".
  * Scaling is done with a bicubic algorithm (stolen from ImageMagick :-)).
  */
-static int
-resize_bicubic(struct jpeg_decompress_struct *dinfo,
-    struct jpeg_compress_struct *cinfo, const unsigned char *p,
-    unsigned char **o)
-{
-	unsigned char *q, *x_vector;
+static void resize_bicubic(
+    struct jpeg_decompress_struct *dinfo,
+    unsigned out_width, unsigned out_height, const unsigned char *p,
+    unsigned char *o) {
+	unsigned char *x_vector;
 	int comp, next_col, next_row;
 	unsigned s_row_width, ty, t_row_width, x, y, num_rows;
 	double factor, *s, *scanline, *scale_scanline;
 	double *t, x_scale, x_span, y_scale, y_span, *y_vector;
 
-	q = NULL;
-
 	/* RGB images have 3 components, grayscale images have only one. */
 	comp = dinfo->num_components;
 	s_row_width = dinfo->output_width * comp;
-	t_row_width = cinfo->image_width  * comp;
-	factor = (double)cinfo->image_width / (double)dinfo->output_width;
-
-	if ( *o == NULL )
-		return (-1);
+	t_row_width = out_width  * comp;
+	factor = (double)out_width / (double)dinfo->output_width;
 
 	/* No scaling needed. */
-	if (dinfo->output_width == cinfo->image_width) {
-		memcpy(*o, p, s_row_width * dinfo->output_height);
-		return (0);
+	if (dinfo->output_width == out_width) {
+		memcpy(o, p, s_row_width * dinfo->output_height);
+		return;
 	}
 
-	x_vector = malloc(s_row_width * sizeof(unsigned char));
-	if (x_vector == NULL)
-		return (-1);
-	y_vector = malloc(s_row_width * sizeof(double));
-	if (y_vector == NULL)
-		return (-1);
-	scanline = malloc(s_row_width * sizeof(double));
-	if (scanline == NULL)
-		return (-1);
-	scale_scanline = malloc((t_row_width + comp) * sizeof(double));
-	if (scale_scanline == NULL)
-		return (-1);
+	check_alloc(x_vector = malloc(s_row_width * sizeof(unsigned char)));
+	check_alloc(y_vector = malloc(s_row_width * sizeof(double)));
+	check_alloc(scanline = malloc(s_row_width * sizeof(double)));
+	check_alloc(scale_scanline = malloc((t_row_width + comp) * sizeof(double)));
 
 	num_rows = 0;
 	next_row = 1;
 	y_span = 1.0;
 	y_scale = factor;
 
-	for (y = 0; y < cinfo->image_height; y++) {
+	for (y = 0; y < out_height; y++) {
 		ty = y * t_row_width;
-		q = *o;
 
 		bzero(y_vector, s_row_width * sizeof(double));
 		bzero(scale_scanline, t_row_width * sizeof(double));
@@ -698,15 +605,13 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
 		/* Copy scanline to target. */
 		t = scale_scanline;
 		for (x = 0; x < t_row_width; x++)
-			q[ty+x] = (unsigned char)t[x];
+			o[ty+x] = (unsigned char)t[x];
 	}
 
 	free(x_vector);
 	free(y_vector);
 	free(scanline);
 	free(scale_scanline);
-
-	return (0);
 }
 
 /*
@@ -715,41 +620,34 @@ resize_bicubic(struct jpeg_decompress_struct *dinfo,
  * the result in "o".
  * Scaling is done with a bilinear algorithm.
  */
-static int
-resize_bilinear(struct jpeg_decompress_struct *dinfo,
-    struct jpeg_compress_struct *cinfo, const unsigned char *p,
-    unsigned char **o)
-{
+static void resize_bilinear(
+    struct jpeg_decompress_struct *dinfo,
+    unsigned out_width, unsigned out_height, const unsigned char *p,
+    unsigned char *o) {
 	double factor, fraction_x, fraction_y, one_minus_x, one_minus_y;
 	unsigned ceil_x, ceil_y, floor_x, floor_y, s_row_width;
 	unsigned tcx, tcy, tfx, tfy, tx, ty, t_row_width, x, y;
-	unsigned char *q;
 
 	/* RGB images have 3 components, grayscale images have only one. */
 	s_row_width = dinfo->num_components * dinfo->output_width;
-	t_row_width = dinfo->num_components * cinfo->image_width;
+	t_row_width = dinfo->num_components * out_width;
 
-	factor = (double)dinfo->output_width / (double)cinfo->image_width;
-
-	if (*o == NULL)
-		return (-1);
+	factor = (double)dinfo->output_width / (double)out_width;
 
 	/* No scaling needed. */
-	if (dinfo->output_width == cinfo->image_width) {
-		memcpy(*o, p, s_row_width * dinfo->output_height);
-		return (0);
+	if (dinfo->output_width == out_width) {
+		memcpy(o, p, s_row_width * dinfo->output_height);
+		return;
 	}
 
-	q = *o;
-
-	for (y = 0; y < cinfo->image_height; y++) {
-		for (x = 0; x < cinfo->image_width; x++) {
+	for (y = 0; y < out_height; y++) {
+		for (x = 0; x < out_width; x++) {
 			floor_x = (unsigned)(x * factor);
 			floor_y = (unsigned)(y * factor);
-			ceil_x = (floor_x + 1 > cinfo->image_width)
+			ceil_x = (floor_x + 1 > out_width)
 			    ? floor_x
 			    : floor_x + 1;
-			ceil_y = (floor_y + 1 > cinfo->image_height)
+			ceil_y = (floor_y + 1 > out_height)
 			    ? floor_y
 			    : floor_y + 1;
 			fraction_x = (x * factor) - floor_x;
@@ -764,21 +662,21 @@ resize_bilinear(struct jpeg_decompress_struct *dinfo,
 			tcx = ceil_x * dinfo->num_components;
 			tcy = ceil_y * s_row_width;
 
-			q[tx + ty] = one_minus_y *
+			o[tx + ty] = one_minus_y *
 			    (one_minus_x * p[tfx + tfy] +
 			    fraction_x * p[tcx + tfy]) +
 			    fraction_y * (one_minus_x * p[tfx + tcy] +
 			    fraction_x  * p[tcx + tcy]);
 
 			if (dinfo->num_components != 1) {
-				q[tx + ty + 1] = one_minus_y *
+				o[tx + ty + 1] = one_minus_y *
 				    (one_minus_x * p[tfx + tfy + 1] +
 				    fraction_x * p[tcx + tfy + 1]) +
 				    fraction_y * (one_minus_x *
 				    p[tfx + tcy + 1] + fraction_x *
 				    p[tcx + tcy + 1]);
 
-				q[tx + ty + 2] = one_minus_y *
+				o[tx + ty + 2] = one_minus_y *
 				    (one_minus_x * p[tfx + tfy + 2] +
 				    fraction_x * p[tcx + tfy + 2]) +
 				    fraction_y * (one_minus_x *
@@ -787,6 +685,4 @@ resize_bilinear(struct jpeg_decompress_struct *dinfo,
 			}
 		}
 	}
-
-	return (0);
 }
