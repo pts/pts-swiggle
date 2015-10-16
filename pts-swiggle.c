@@ -159,8 +159,7 @@ main(int argc, char **argv)
 	}
 
 	/* Put the inputs to increasing order for deterministic processing. */
-	qsort(argv, argc, sizeof argv[0],
-	      (int(*)(const void*,const void*))strcmp);
+	qsort(argv, argc, sizeof argv[0], sort_by_filename);
 
 	for (i = 0; i < argc; ++i) {
 		if (stat(argv[i], &sb)) {
