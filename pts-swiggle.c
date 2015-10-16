@@ -39,12 +39,12 @@
  */
 
 /* TODO(pts): Process directories recursively. */
-/* TODO(pts): Try all files as JPEG, don't die on JPEG read errors. */
 /* TODO(pts): Remove unused command-line flags and their help. */
 
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -255,6 +255,22 @@ static void process_dir(char *dir) {
 	printf("%d image%s processed in dir: %s\n", imgcount, imgcount != 1 ? "s" : "", dir);
 }
 
+struct my_jpeg_error_mgr {
+	struct jpeg_error_mgr pub;
+	jmp_buf setjmp_buffer;
+	/* char last_msg[JMSG_LENGTH_MAX]; */
+};
+
+static void my_jpeg_error_exit(j_common_ptr cinfo) {
+	/* *(cinfo->err) is now equivalent to myerr->pub */
+	struct my_jpeg_error_mgr *myerr = (struct my_jpeg_error_mgr*)cinfo->err;
+	(*(cinfo->err->output_message))(cinfo);  /* Prints as libjpeg would print to stderr. */
+	/* fprintf(stderr, "BYE!\n"); */
+	/* exit(EXIT_FAILURE); */
+	/* (*(cinfo->err->format_message))(cinfo, last_msg); */
+	longjmp(myerr->setjmp_buffer, 1); /* Jump to the setjmp point */
+}
+
 static void create_thumbnail(char *filename) {
 	/* TODO(pts): Don't use MAXPATHLEN. */
 	char final[MAXPATHLEN], tmp[MAXPATHLEN];
@@ -265,7 +281,8 @@ static void create_thumbnail(char *filename) {
 	struct stat sb;
 	struct jpeg_decompress_struct dinfo;
 	struct jpeg_compress_struct cinfo;
-	struct jpeg_error_mgr jerr;
+	struct my_jpeg_error_mgr derr;
+	struct jpeg_error_mgr cerr;
 	unsigned char *o, *p;
 	JSAMPARRAY samp;
 	JSAMPROW row_pointer[1];
@@ -273,19 +290,18 @@ static void create_thumbnail(char *filename) {
 	unsigned img_height;
 	unsigned img_scalewidth;
 	unsigned img_scaleheight;
+	int has_decompress_started;
 
-	/* TODO(pts): Preinit these outside the loop. */
-	/* TODO(pts): Don't abort the process on a JPEG error. */
-	dinfo.err = jpeg_std_error(&jerr);
-	cinfo.err = jpeg_std_error(&jerr);
+	dinfo.err = jpeg_std_error(&derr.pub);
+	derr.pub.error_exit = my_jpeg_error_exit;
+	cinfo.err = jpeg_std_error(&cerr);
 	if (g_flags.bilinear)
 		resize_func = resize_bilinear;
 	else
 		resize_func = resize_bicubic;
 
-	p = o = NULL;
-
 	printf("Image %s\n", filename);
+	fflush(stdout);
 	if (stat(filename, &sb)) {
 		fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
 		    filename, strerror(errno));
@@ -305,6 +321,7 @@ static void create_thumbnail(char *filename) {
 		prefixlen = (p != filename && p[-1] == '.') ? p - filename - 1 : r - filename;
 		memcpy(final, filename, prefixlen);
 		strcpy(final + prefixlen, ".th.jpg");
+		sprintf(tmp, "%s.tmp", final);
 	}
 
 	/*
@@ -322,9 +339,30 @@ static void create_thumbnail(char *filename) {
 		g_flags.exit_code = EXIT_FAILURE;
 		return;
 	}
+	p = NULL;
+	outfile = NULL;
+	has_decompress_started = 0;
+	if (setjmp(derr.setjmp_buffer)) {
+		/* If we get here, the JPEG code has signaled a fatal error, which was already printed to stderr in my_jpeg_error_exit.
+		 * Example non-fatal error: Premature end of JPEG file
+		 * Example fatal error: Not a JPEG file: starts with 0x66 0x6f
+		 * TODO(pts): We should report (with fprintf(stderr, ...)) both fatal and non-fatal errors.
+		 * After a non-fatal error, the error is printed to stderr, jpeg_read_scanlines can continue and will return gray pixels.
+		 */
+		if (has_decompress_started) jpeg_finish_decompress(&dinfo);
+		jpeg_destroy_decompress(&dinfo);
+		fclose(infile);
+		free(p);
+		if (outfile) {
+			fclose(outfile);
+			unlink(tmp);
+		}
+		g_flags.exit_code = EXIT_FAILURE;
+		return;
+	}
 	jpeg_create_decompress(&dinfo);
 	jpeg_stdio_src(&dinfo, infile);
-	(void)jpeg_read_header(&dinfo, FALSE);  /* TODO(pts): Don't abort the program on failure. */
+	(void)jpeg_read_header(&dinfo, FALSE);
 
 	img_width = dinfo.image_width;
 	img_height = dinfo.image_height;
@@ -345,7 +383,6 @@ static void create_thumbnail(char *filename) {
 	 * If the image is not cached, we need to read it in,
 	 * resize it, and write it out.
 	 */
-	sprintf(tmp, "%s.tmp", final);
 	if ((outfile = fopen(tmp, "wb")) == NULL) {
 		fprintf(stderr, "%s: can't fopen(%s): %s\n",
 		    g_flags.progname, tmp, strerror(errno));
@@ -367,6 +404,7 @@ static void create_thumbnail(char *filename) {
 	else if ((int) factor >= 2)
 		dinfo.scale_denom = 2;
 
+	has_decompress_started = 1;
 	jpeg_start_decompress(&dinfo);
 	row_width = dinfo.output_width * dinfo.num_components;
 	check_alloc(p = malloc(row_width * dinfo.output_height * sizeof(unsigned char)));
@@ -382,6 +420,7 @@ static void create_thumbnail(char *filename) {
 	}
 	jpeg_finish_decompress(&dinfo);
 	jpeg_destroy_decompress(&dinfo);
+	/* if (setjmp(...)) above can't happen anymore. */
 	fclose(infile);
 
 	/* Resize the image. */
@@ -408,6 +447,7 @@ static void create_thumbnail(char *filename) {
 	}
 	jpeg_finish_compress(&cinfo);
 	fclose(outfile);
+	outfile = NULL;
 	jpeg_destroy_compress(&cinfo);
 	free(o);
 
