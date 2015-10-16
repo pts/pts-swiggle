@@ -196,11 +196,13 @@ static void process_dir(char *dir) {
 	unsigned imgcount;
 	unsigned imgcapacity;
 	unsigned i;
-	char *fn, *p;
+	char *fn;
 	unsigned dir_size;
 	struct dirent *dent;
 	struct stat sb;
 	DIR *thisdir;
+	FILE *f;
+	char header[3];
 
 	if ((thisdir = opendir(dir)) == NULL) {
 		fprintf(stderr, "%s: can't opendir(%s): %s\n", g_flags.progname, dir,
@@ -214,12 +216,8 @@ static void process_dir(char *dir) {
 	imgcount = 0;
 	imgcapacity = 0;
 	while ((dent = readdir(thisdir)) != NULL) {
-	        /* We only want regular files that have a filename suffix. */
-		if ((p = strrchr(dent->d_name, '.')) == NULL) continue;
-		++p;
-		/* We currently only handle .jpg files. */
-		/* TODO(pts): Remove this `if' */
-		if (strcasecmp(p, "jpg" ) != 0 && strcasecmp(p, "jpeg") != 0) continue;
+		if (dent->d_name[0] == '.' &&  /* Skip "." and ".." */
+		    (dent->d_name[1] == '\0' || (dent->d_name[1] == '.' && dent->d_name[2] == '\0'))) continue;
 		check_alloc(fn = malloc(dir_size + strlen(dent->d_name) + 2));
 		sprintf(fn, "%s/%s", dir, dent->d_name);
 		if (
@@ -230,6 +228,14 @@ static void process_dir(char *dir) {
 		    (stat(fn, &sb) == 0 && !S_ISREG(sb.st_mode))) {
 			free(fn);
 			continue;
+		}
+		if ((f = fopen(fn, "rb")) != NULL) {
+			if (3 != fread(header, 1, 3, f) || 0 != memcmp(header, "\xff\xd8\xff", 3)) {
+				fclose(f);
+				free(fn);
+				continue;  /* Silently skip non-JPEG files. */
+			}
+			fclose(f);
 		}
 		if (imgcount == imgcapacity) {
 			imgcapacity = imgcapacity < 16 ? 16 : imgcapacity << 1;
