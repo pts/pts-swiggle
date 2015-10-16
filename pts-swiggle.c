@@ -39,6 +39,7 @@
  */
 
 /* TODO(pts): Remove unused command-line flags and their help. */
+/* TODO(pts): Don't resize of target size is same or a bit less than source size. */
 
 #include <ctype.h>
 #include <dirent.h>
@@ -313,7 +314,7 @@ static void my_jpeg_error_exit(j_common_ptr cinfo) {
 static void create_thumbnail(char *filename) {
 	/* TODO(pts): Don't use MAXPATHLEN. */
 	char final[MAXPATHLEN], tmp[MAXPATHLEN];
-	double factor, ratio;
+	double ratio;
 	FILE *infile, *outfile;
 	unsigned n, row_width;
 	void (*resize_func)(struct jpeg_decompress_struct *dinfo, unsigned, unsigned, const unsigned char *p, unsigned char *o);
@@ -325,10 +326,11 @@ static void create_thumbnail(char *filename) {
 	unsigned char *o, *p;
 	JSAMPARRAY samp;
 	JSAMPROW row_pointer[1];
-	unsigned img_width;
-	unsigned img_height;
+	unsigned dinfo_width;
+	unsigned dinfo_height;
 	unsigned img_scalewidth;
 	unsigned img_scaleheight;
+	unsigned img_datasize;
 	int has_decompress_started;
 
 	dinfo.err = jpeg_std_error(&derr.pub);
@@ -399,16 +401,16 @@ static void create_thumbnail(char *filename) {
 	jpeg_stdio_src(&dinfo, infile);
 	(void)jpeg_read_header(&dinfo, FALSE);
 
-	img_width = dinfo.image_width;
-	img_height = dinfo.image_height;
+	dinfo_width = dinfo.image_width;
+	dinfo_height = dinfo.image_height;
 
 	/* ratio needed to scale image correctly. */
-	ratio = (double)img_width / (double)img_height;
+	ratio = (double)dinfo_width / (double)dinfo_height;
 	img_scaleheight = g_flags.scaleheight;
 	img_scalewidth = (int)((double)img_scaleheight * ratio + 0.5);
 	/* TODO(pts): Fix too large width. */
-	if (!(img_scaleheight < img_height ||
-	      img_scalewidth < img_width)) {
+	if (!(img_scaleheight < dinfo_height ||
+	      img_scalewidth < dinfo_width)) {
 		jpeg_destroy_decompress(&dinfo);
 		fclose(infile);
 		return;
@@ -431,12 +433,11 @@ static void create_thumbnail(char *filename) {
 	 * Use libjpeg's handy feature to downscale the
 	 * original on the fly while reading it in.
 	 */
-	factor = (double)img_width / (double)img_scalewidth;
-	if ((int) factor >= 8)
+	if (dinfo_width >= 8 * img_scalewidth)
 		dinfo.scale_denom = 8;
-	else if ((int) factor >= 4)
+	else if (dinfo_width >= 4 * img_scalewidth)
 		dinfo.scale_denom = 4;
-	else if ((int) factor >= 2)
+	else if (dinfo_width >= 2 * img_scalewidth)
 		dinfo.scale_denom = 2;
 
 	has_decompress_started = 1;
@@ -459,13 +460,27 @@ static void create_thumbnail(char *filename) {
 	fclose(infile);
 
 	/* Resize the image. */
-	check_alloc(o = malloc(img_scalewidth * img_scaleheight * dinfo.num_components * sizeof(unsigned char)));
-	if (g_flags.bilinear)
-		resize_func = resize_bilinear;
-	else
-		resize_func = resize_bicubic;
-	resize_func(&dinfo, img_scalewidth, img_scaleheight, p, o);
-	free(p);
+	img_datasize = img_scalewidth * img_scaleheight * dinfo.num_components;
+#if 0
+	fprintf(stderr, "img_scalewidth=%d img_scaleheight=%d dinfo.num_components=%d img_datasize=%d\n", img_scalewidth, img_scaleheight, dinfo.num_components, img_datasize);
+	fprintf(stderr, "dinfo.output_width=%d dinfo.output_height=%d s_row_width=%d\n", dinfo.output_width, dinfo.output_height, dinfo.output_width * dinfo.num_components);
+#endif
+	/* Typically, if dinfo.output_width == img_scalewidth, then the heights are also the same.
+	 * A notable excaption when it is +1: input JPEG 700x961, -H 480, dinfo.scale_denom=2, dinfo.output_width=350 dinfo.output_height=481.
+	 */
+	if (dinfo.output_width == img_scalewidth &&
+	    (dinfo.output_height == img_scaleheight || dinfo.output_height == img_scaleheight + 1)) {
+		/* No scaling needed, input (p) is already of the right size.
+		 * We ignore the last row of p in the +1 case.
+		 */
+		o = p;
+	} else {
+		check_alloc(o = malloc(img_datasize * sizeof(unsigned char)));
+		resize_func = g_flags.bilinear ? resize_bilinear : resize_bicubic;
+		resize_func(&dinfo, img_scalewidth, img_scaleheight, p, o);
+		free(p);
+	}
+	p = NULL;  /* Extra carefulness to prevent a double free. */
 
 	/* Prepare the compression object. */
 	jpeg_create_compress(&cinfo);
@@ -591,12 +606,6 @@ static void resize_bicubic(
 	t_row_width = out_width  * comp;
 	factor = (double)out_width / (double)dinfo->output_width;
 
-	/* No scaling needed. */
-	if (dinfo->output_width == out_width) {
-		memcpy(o, p, s_row_width * dinfo->output_height * sizeof(unsigned char));
-		return;
-	}
-
 	check_alloc(x_vector = malloc(s_row_width * sizeof(unsigned char)));
 	check_alloc(y_vector = malloc(s_row_width * sizeof(double)));
 	check_alloc(scanline = malloc(s_row_width * sizeof(double)));
@@ -711,15 +720,7 @@ static void resize_bilinear(
 	/* RGB images have 3 components, grayscale images have only one. */
 	s_row_width = dinfo->num_components * dinfo->output_width;
 	t_row_width = dinfo->num_components * out_width;
-
 	factor = (double)dinfo->output_width / (double)out_width;
-
-	/* No scaling needed. */
-	if (dinfo->output_width == out_width) {
-		memcpy(o, p, s_row_width * dinfo->output_height * sizeof(unsigned char));
-		return;
-	}
-
 	for (y = 0; y < out_height; y++) {
 		for (x = 0; x < out_width; x++) {
 			floor_x = (unsigned)(x * factor);
