@@ -259,7 +259,7 @@ static void process_dir(char *dir) {
 			continue;
 		}
 		if ((f = fopen(fn, "rb")) != NULL) {
-			if (3 != fread(header, 1, 3, f) || 0 != memcmp(header, "\xff\xd8\xff", 3)) {
+			if (3 != fread(header, 1, 3, f) || 0 != memcmp(header, "\xff\xd8\xff", 3 * sizeof(char))) {
 				fclose(f);
 				free(fn);
 				continue;  /* Silently skip non-JPEG files. */
@@ -348,13 +348,13 @@ static void create_thumbnail(char *filename) {
 		const char* r = filename + strlen(filename);
 		const char* p = r;
 		size_t prefixlen;
-		if (r - filename >= 7 && 0 == memcmp(r - 7, ".th.jpg", 7))
+		if (r - filename >= 7 && 0 == memcmp(r - 7, ".th.jpg", 7 * sizeof(char)))
 			return;  /* Already a thumbnail. */
 
 		/* Replace image extension with .th.jpg, save result to th_filename */
 		for (; p != filename && p[-1] != '/' && p[-1] != '.'; --p) {}
 		prefixlen = (p != filename && p[-1] == '.') ? p - filename - 1 : r - filename;
-		memcpy(final, filename, prefixlen);
+		memcpy(final, filename, prefixlen * sizeof(char));
 		strcpy(final + prefixlen, ".th.jpg");
 		sprintf(tmp, "%s.tmp", final);
 	}
@@ -450,7 +450,7 @@ static void create_thumbnail(char *filename) {
 	n = 0;
 	while (dinfo.output_scanline < dinfo.output_height) {
 		jpeg_read_scanlines(&dinfo, samp, 1);
-		memcpy(&p[n*row_width], *samp, row_width);
+		memcpy(&p[n*row_width], *samp, row_width * sizeof(char));
 		n++;
 	}
 	jpeg_finish_decompress(&dinfo);
@@ -593,7 +593,7 @@ static void resize_bicubic(
 
 	/* No scaling needed. */
 	if (dinfo->output_width == out_width) {
-		memcpy(o, p, s_row_width * dinfo->output_height);
+		memcpy(o, p, s_row_width * dinfo->output_height * sizeof(unsigned char));
 		return;
 	}
 
@@ -617,7 +617,7 @@ static void resize_bicubic(
 		while (y_scale < y_span) {
 			if (next_row && num_rows < dinfo->output_height) {
 				/* Read a new scanline.  */
-				memcpy(x_vector, p, s_row_width);
+				memcpy(x_vector, p, s_row_width * sizeof(unsigned char));
 				p += s_row_width;
 				num_rows++;
 			}
@@ -629,7 +629,7 @@ static void resize_bicubic(
 		}
 		if (next_row && num_rows < dinfo->output_height) {
 			/* Read a new scanline.  */
-			memcpy(x_vector, p, s_row_width);
+			memcpy(x_vector, p, s_row_width * sizeof(unsigned char));
 			p += s_row_width;
 			num_rows++;
 			next_row = 0;
@@ -716,7 +716,7 @@ static void resize_bilinear(
 
 	/* No scaling needed. */
 	if (dinfo->output_width == out_width) {
-		memcpy(o, p, s_row_width * dinfo->output_height);
+		memcpy(o, p, s_row_width * dinfo->output_height * sizeof(unsigned char));
 		return;
 	}
 
