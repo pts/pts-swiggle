@@ -38,7 +38,6 @@
  *
  */
 
-/* TODO(pts): Process directories recursively. */
 /* TODO(pts): Remove unused command-line flags and their help. */
 
 #include <ctype.h>
@@ -67,8 +66,9 @@ static struct {
 	int scaleheight;
 	int force;
 	int bilinear;
+	int recursive;
 	int exit_code;
-} g_flags = { "", 480, 0, 0, EXIT_SUCCESS };
+} g_flags = { "", 480, 0, 0, 0, EXIT_SUCCESS };
 
 /*
  * Function declarations.
@@ -108,7 +108,7 @@ main(int argc, char **argv)
 
 	g_flags.progname = argv[0];
 
-	while ((i = getopt(argc, argv, "c:d:h:H:r:s:flov")) != -1) {
+	while ((i = getopt(argc, argv, "c:d:h:H:r:s:floRv")) != -1) {
 		switch (i) {
 		case 'c':  /* cols, ignored */
 			break;
@@ -125,7 +125,8 @@ main(int argc, char **argv)
 				exit(EXIT_FAILURE);
 			}
 			break;
-		case 'r':  /* rows, ignored */
+		case 'R':
+			g_flags.recursive = 1;
 			break;
 		case 's':  /* Sorting, ignored. */
 			break;
@@ -193,8 +194,9 @@ main(int argc, char **argv)
  */
 static void process_dir(char *dir) {
 	char **imglist;
-	unsigned imgcount;
-	unsigned imgcapacity;
+	unsigned imgcount, imgcapacity;
+	char **subdirlist;
+	unsigned subdircount, subdircapacity;
 	unsigned i;
 	char *fn;
 	unsigned dir_size;
@@ -203,6 +205,7 @@ static void process_dir(char *dir) {
 	DIR *thisdir;
 	FILE *f;
 	char header[3];
+	int stat_result;
 
 	if ((thisdir = opendir(dir)) == NULL) {
 		fprintf(stderr, "%s: can't opendir(%s): %s\n", g_flags.progname, dir,
@@ -213,20 +216,46 @@ static void process_dir(char *dir) {
 
 	dir_size = strlen(dir);
 	imglist = NULL;
-	imgcount = 0;
-	imgcapacity = 0;
+	imgcount = imgcapacity = 0;
+	subdirlist = NULL;
+	subdircount = subdircapacity = 0;
 	while ((dent = readdir(thisdir)) != NULL) {
 		if (dent->d_name[0] == '.' &&  /* Skip "." and ".." */
 		    (dent->d_name[1] == '\0' || (dent->d_name[1] == '.' && dent->d_name[2] == '\0'))) continue;
 		check_alloc(fn = malloc(dir_size + strlen(dent->d_name) + 2));
 		sprintf(fn, "%s/%s", dir, dent->d_name);
+		stat_result = 0;
+		/* TODO(pts): Don't enter to symlinks to directories. */
 		if (
 #ifdef DT_UNKNOWN
 		    dent->d_type == DT_REG ? 0 :
+		    dent->d_type == DT_DIR ? !g_flags.recursive :
 		    dent->d_type != DT_UNKNOWN ? 1 :
 #endif
-		    (stat(fn, &sb) == 0 && !S_ISREG(sb.st_mode))) {
+		    ((stat_result = stat(fn, &sb)) == 0 &&
+		     !S_ISREG(sb.st_mode) &&
+		     (!g_flags.recursive || !S_ISDIR(sb.st_mode)))) {
 			free(fn);
+			continue;
+		}
+		if (stat_result != 0) {
+			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
+			    fn, strerror(errno));
+			free(fn);
+			g_flags.exit_code = EXIT_FAILURE;
+			continue;
+		}
+		if (/* is_dir = */
+#ifdef DT_UNKNOWN
+		    dent->d_type == DT_DIR ? 1 :
+		    dent->d_type != DT_UNKNOWN ? 0 :
+#endif
+		    S_ISDIR(sb.st_mode)) {
+			if (subdircount == subdircapacity) {
+				subdircapacity = subdircapacity < 16 ? 16 : subdircapacity << 1;
+				check_alloc(subdirlist = realloc(subdirlist, subdircapacity * sizeof(*subdirlist)));
+			}
+			subdirlist[subdircount++] = fn;  /* Takes ownership. */
 			continue;
 		}
 		if ((f = fopen(fn, "rb")) != NULL) {
@@ -249,16 +278,20 @@ static void process_dir(char *dir) {
 		    strerror(errno));
 		g_flags.exit_code = EXIT_FAILURE;
 	}
-	/* Sort the list according to desired sorting function. */
+	/* Sort imglist according to desired sorting function. */
 	qsort(imglist, imgcount, sizeof(*imglist), sort_by_filename);
 	for (i = 0; i < imgcount; ++i) {
 		create_thumbnail(imglist[i]);
-	}
-	for (i = 0; i < imgcount; ++i) {
 		free(imglist[i]);
 	}
 	free(imglist);
 	printf("%d image%s processed in dir: %s\n", imgcount, imgcount != 1 ? "s" : "", dir);
+	qsort(subdirlist, subdircount, sizeof(*subdirlist), sort_by_filename);
+	for (i = 0; i < subdircount; ++i) {
+		process_dir(subdirlist[i]);
+		free(subdirlist[i]);
+	}
+	free(subdirlist);
 }
 
 struct my_jpeg_error_mgr {
@@ -514,6 +547,7 @@ usage(void)
 	fprintf(stderr, "\nUsage:\n");
 	fprintf(stderr, "pts-swiggle [options] /path/to/gallery\n\n");
 	fprintf(stderr, "Available options:\n");
+	fprintf(stderr, "   -R         process directories recursively\n");
 	fprintf(stderr, "   -c <x> ... columns per thumbnail index page\n");
 	fprintf(stderr, "   -r <y> ... rows per thumbnail index page\n");
 	fprintf(stderr, "   -h <i> ... height of the thumbnails in pixel\n");
