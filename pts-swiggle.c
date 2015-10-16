@@ -334,10 +334,6 @@ static void create_thumbnail(char *filename) {
 	dinfo.err = jpeg_std_error(&derr.pub);
 	derr.pub.error_exit = my_jpeg_error_exit;
 	cinfo.err = jpeg_std_error(&cerr);
-	if (g_flags.bilinear)
-		resize_func = resize_bilinear;
-	else
-		resize_func = resize_bicubic;
 
 	printf("Image %s\n", filename);
 	fflush(stdout);
@@ -464,6 +460,10 @@ static void create_thumbnail(char *filename) {
 
 	/* Resize the image. */
 	check_alloc(o = malloc(img_scalewidth * img_scaleheight * dinfo.num_components * sizeof(unsigned char)));
+	if (g_flags.bilinear)
+		resize_func = resize_bilinear;
+	else
+		resize_func = resize_bicubic;
 	resize_func(&dinfo, img_scalewidth, img_scaleheight, p, o);
 	free(p);
 
