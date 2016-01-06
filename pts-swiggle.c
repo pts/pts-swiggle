@@ -493,6 +493,13 @@ static void create_thumbnail(char *filename) {
 
 	/* Write the image out. */
 	jpeg_start_compress(&cinfo, FALSE);
+	{
+		char comment_text[16 + sizeof(unsigned) * 6];
+		sprintf(comment_text, "REALDIMEN:%ux%u",
+		        dinfo_width, dinfo_height);
+		jpeg_write_marker(&cinfo, JPEG_COM, (void*)comment_text,
+		                  strlen(comment_text));
+	}
 	while (cinfo.next_scanline < cinfo.image_height) {
 		row_pointer[0] = &o[cinfo.input_components *
 		    cinfo.image_width * cinfo.next_scanline];
