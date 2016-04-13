@@ -68,8 +68,9 @@ static struct {
 	int force;
 	int bilinear;
 	int recursive;
+	int also_small;
 	int exit_code;
-} g_flags = { "", 480, 0, 0, 0, EXIT_SUCCESS };
+} g_flags = { "", 480, 0, 0, 0, 0, EXIT_SUCCESS };
 
 /*
  * Function declarations.
@@ -109,7 +110,7 @@ main(int argc, char **argv)
 
 	g_flags.progname = argv[0];
 
-	while ((i = getopt(argc, argv, "c:d:h:H:r:s:floRv")) != -1) {
+	while ((i = getopt(argc, argv, "c:d:h:H:r:s:floRva")) != -1) {
 		switch (i) {
 		case 'c':  /* cols, ignored */
 			break;
@@ -138,6 +139,9 @@ main(int argc, char **argv)
 			g_flags.bilinear = 1;
 			break;
 		case 'o':  /* rm_orphans, ignored. */
+			break;
+		case 'a':
+			g_flags.also_small = 1;
 			break;
 		case 'v':
 			version();
@@ -408,11 +412,18 @@ static void create_thumbnail(char *filename) {
 	img_scaleheight = g_flags.scaleheight;
 	img_scalewidth = (int)((double)img_scaleheight * ratio + 0.5);
 	/* TODO(pts): Fix too large width. */
-	if (!(img_scaleheight < dinfo_height ||
-	      img_scalewidth < dinfo_width)) {
-		jpeg_destroy_decompress(&dinfo);
-		fclose(infile);
-		return;
+	/* Is the image smaller than the thumbnail? */
+	if (img_scaleheight >= dinfo_height && img_scalewidth >= dinfo_width) {
+		if (g_flags.also_small) {
+			/* Re-encode JPEG in original size. */
+			img_scaleheight = dinfo_height;
+			img_scalewidth = dinfo_width;
+		} else {
+			/* Skip creating the thumbnail. */
+			jpeg_destroy_decompress(&dinfo);
+			fclose(infile);
+			return;
+		}
 	}
 
 	/*
@@ -506,6 +517,16 @@ static void create_thumbnail(char *filename) {
 		jpeg_write_scanlines(&cinfo, row_pointer, 1);
 	}
 	jpeg_finish_compress(&cinfo);
+	fflush(outfile);
+	if (ferror(outfile)) {
+		fprintf(stderr, "%s: error writing data to: %s\n", g_flags.progname, tmp);
+		fclose(outfile);
+		jpeg_destroy_compress(&cinfo);
+		free(o);
+		unlink(tmp);
+		g_flags.exit_code = EXIT_FAILURE;
+		return;
+	}
 	fclose(outfile);
 	outfile = NULL;
 	jpeg_destroy_compress(&cinfo);
@@ -586,6 +607,7 @@ usage(void)
 	fprintf(stderr, "   -d     ... title string for gallery and albums, "
 	    "if not provided in\n");
 	fprintf(stderr, "              '.description' files\n");
+	fprintf(stderr, "   -a     ... also create thumbnails for small files (no scaling)\n");
 	fprintf(stderr, "   -v     ... show version info\n\n");
 	exit(EXIT_FAILURE);
 }
