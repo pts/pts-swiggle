@@ -82,10 +82,10 @@ static int sort_by_filename(const void *, const void *);
 static void usage(void);
 static void version(void);
 static void resize_bicubic(
-    struct jpeg_decompress_struct *,
+    unsigned num_components, unsigned output_width, unsigned output_height,
     unsigned, unsigned, const unsigned char *, unsigned char *);
 static void resize_bilinear(
-    struct jpeg_decompress_struct *,
+    unsigned num_components, unsigned output_width, unsigned output_height,
     unsigned, unsigned, const unsigned char *, unsigned char *);
 
 static void check_alloc(const void *p) {
@@ -314,31 +314,157 @@ static void my_jpeg_error_exit(j_common_ptr cinfo) {
 	longjmp(myerr->setjmp_buffer, 1); /* Jump to the setjmp point */
 }
 
+struct image {
+  /* dinfo fields. */
+  unsigned num_components;
+  unsigned width;
+  unsigned height;
+  unsigned output_width;
+  unsigned output_height;
+  J_COLOR_SPACE colorspace;
+
+  unsigned scalewidth;
+  unsigned scaleheight;
+  unsigned char *data;
+  FILE *outfile;
+};
+
+/* Returns whether the scaled image file should be produced. */
+static char compute_scaledims(struct image *img) {
+	/* ratio needed to scale image correctly. */
+	double ratio = (double)img->width / (double)img->height;
+	img->scaleheight = g_flags.scaleheight;
+	img->scalewidth = (int)((double)img->scaleheight * ratio + 0.5);
+	/* TODO(pts): Fix too large width. */
+	/* Is the image smaller than the thumbnail? */
+	if (img->scaleheight >= img->height && img->scalewidth >= img->width) {
+		if (g_flags.also_small) {
+			/* Re-encode JPEG in original size. */
+			img->scaleheight = img->height;
+			img->scalewidth = img->width;
+		} else {
+			/* Skip creating the thumbnail. */
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* Returns whether the scaled image file should be produced. */
+static char load_image(struct image *img, const char *filename, const char *tmp_filename) {
+	struct jpeg_decompress_struct dinfo;
+	struct my_jpeg_error_mgr derrmgr;
+	unsigned char *pr;
+	FILE *infile;
+	char has_decompress_started = 0;
+	unsigned row_width;
+	JSAMPARRAY samp;
+
+	/*
+	 * Open the file and get some basic image information.
+	 */
+	if ((infile = fopen(filename, "rb")) == NULL) {
+		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname,
+		    filename, strerror(errno));
+		g_flags.exit_code = EXIT_FAILURE;
+		return 0;
+	}
+	
+	img->data = NULL;
+	img->outfile = NULL;
+	dinfo.err = jpeg_std_error(&derrmgr.pub);
+	derrmgr.pub.error_exit = my_jpeg_error_exit;
+	if (setjmp(derrmgr.setjmp_buffer)) {
+		/* If we get here, the JPEG code has signaled a fatal error, which was already printed to stderr in my_jpeg_error_exit.
+		 * Example non-fatal error: Premature end of JPEG file
+		 * Example fatal error: Not a JPEG file: starts with 0x66 0x6f
+		 * TODO(pts): We should report (with fprintf(stderr, ...)) both fatal and non-fatal errors.
+		 * After a non-fatal error, the error is printed to stderr, jpeg_read_scanlines can continue and will return gray pixels.
+		 */
+		if (has_decompress_started) jpeg_finish_decompress(&dinfo);
+		jpeg_destroy_decompress(&dinfo);
+		fclose(infile);
+		free(img->data);
+		if (img->outfile) {
+			fclose(img->outfile);
+			unlink(tmp_filename);
+		}
+		g_flags.exit_code = EXIT_FAILURE;
+		return 0;
+	}
+	jpeg_create_decompress(&dinfo);
+	jpeg_stdio_src(&dinfo, infile);
+	(void)jpeg_read_header(&dinfo, FALSE);
+
+	img->width = dinfo.image_width;
+	img->height = dinfo.image_height;
+	img->num_components = dinfo.num_components;
+
+	if (!compute_scaledims(img)) {
+		jpeg_destroy_decompress(&dinfo);
+		fclose(infile);
+		return 0;
+	}
+
+	/*
+	 * If the image is not cached, we need to read it in,
+	 * resize it, and write it out.
+	 */
+	if ((img->outfile = fopen(tmp_filename, "wb")) == NULL) {
+		fprintf(stderr, "%s: can't fopen(%s): %s\n",
+		    g_flags.progname, tmp_filename, strerror(errno));
+		jpeg_destroy_decompress(&dinfo);
+		fclose(infile);
+		g_flags.exit_code = EXIT_FAILURE;
+		return 0;
+	}
+
+	/*
+	 * Use libjpeg's handy feature to downscale the
+	 * original on the fly while reading it in.
+	 */
+	if (img->width >= 8 * img->scalewidth)
+		dinfo.scale_denom = 8;
+	else if (img->width >= 4 * img->scalewidth)
+		dinfo.scale_denom = 4;
+	else if (img->width >= 2 * img->scalewidth)
+		dinfo.scale_denom = 2;
+
+	has_decompress_started = 1;
+	jpeg_start_decompress(&dinfo);
+	img->output_width = dinfo.output_width;
+	img->output_height = dinfo.output_height;
+	img->colorspace = dinfo.out_color_space;
+	row_width = dinfo.output_width * img->num_components;
+	check_alloc(img->data = malloc(row_width * dinfo.output_height * sizeof(unsigned char)));
+	samp = (*dinfo.mem->alloc_sarray)
+	    ((j_common_ptr)&dinfo, JPOOL_IMAGE, row_width, 1);
+
+	/* Read the image into memory. */
+	pr = img->data;
+	while (dinfo.output_scanline < dinfo.output_height) {
+		jpeg_read_scanlines(&dinfo, samp, 1);
+		memcpy(pr, *samp, row_width * sizeof(char));
+		pr += row_width;
+	}
+	jpeg_finish_decompress(&dinfo);
+	jpeg_destroy_decompress(&dinfo);
+	/* if (setjmp(...)) above can't happen anymore. */
+	fclose(infile);
+	return 1;
+}
+
 static void create_thumbnail(char *filename) {
 	/* TODO(pts): Don't use MAXPATHLEN. */
-	char final[MAXPATHLEN], tmp[MAXPATHLEN];
-	double ratio;
-	FILE *infile, *outfile;
-	unsigned n, row_width;
-	void (*resize_func)(struct jpeg_decompress_struct *dinfo, unsigned, unsigned, const unsigned char *p, unsigned char *o);
+	char final[MAXPATHLEN], tmp_filename[MAXPATHLEN];
+	void (*resize_func)(unsigned num_components, unsigned output_width, unsigned output_height, unsigned, unsigned, const unsigned char *p, unsigned char *o);
 	struct stat sb;
-	struct jpeg_decompress_struct dinfo;
 	struct jpeg_compress_struct cinfo;
-	struct my_jpeg_error_mgr derr;
 	struct jpeg_error_mgr cerr;
-	unsigned char *o, *p;
-	JSAMPARRAY samp;
-	JSAMPROW row_pointer[1];
-	unsigned dinfo_width;
-	unsigned dinfo_height;
-	unsigned img_scalewidth;
-	unsigned img_scaleheight;
+	unsigned char *o;
+	struct image imgs, *img = &imgs;
 	unsigned img_datasize;
-	int has_decompress_started;
-
-	dinfo.err = jpeg_std_error(&derr.pub);
-	derr.pub.error_exit = my_jpeg_error_exit;
-	cinfo.err = jpeg_std_error(&cerr);
+	JSAMPROW row_pointer[1];
 
 	printf("Image %s\n", filename);
 	fflush(stdout);
@@ -361,7 +487,7 @@ static void create_thumbnail(char *filename) {
 		prefixlen = (p != filename && p[-1] == '.') ? p - filename - 1 : r - filename;
 		memcpy(final, filename, prefixlen * sizeof(char));
 		strcpy(final + prefixlen, ".th.jpg");
-		sprintf(tmp, "%s.tmp", final);
+		sprintf(tmp_filename, "%s.tmp", final);
 	}
 
 	/*
@@ -370,135 +496,39 @@ static void create_thumbnail(char *filename) {
 	 */
 	if (!g_flags.force && check_cache(final, &sb)) return;
 
-	/*
-	 * Open the file and get some basic image information.
-	 */
-	if ((infile = fopen(filename, "rb")) == NULL) {
-		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname,
-		    filename, strerror(errno));
-		g_flags.exit_code = EXIT_FAILURE;
-		return;
-	}
-	p = NULL;
-	outfile = NULL;
-	has_decompress_started = 0;
-	if (setjmp(derr.setjmp_buffer)) {
-		/* If we get here, the JPEG code has signaled a fatal error, which was already printed to stderr in my_jpeg_error_exit.
-		 * Example non-fatal error: Premature end of JPEG file
-		 * Example fatal error: Not a JPEG file: starts with 0x66 0x6f
-		 * TODO(pts): We should report (with fprintf(stderr, ...)) both fatal and non-fatal errors.
-		 * After a non-fatal error, the error is printed to stderr, jpeg_read_scanlines can continue and will return gray pixels.
-		 */
-		if (has_decompress_started) jpeg_finish_decompress(&dinfo);
-		jpeg_destroy_decompress(&dinfo);
-		fclose(infile);
-		free(p);
-		if (outfile) {
-			fclose(outfile);
-			unlink(tmp);
-		}
-		g_flags.exit_code = EXIT_FAILURE;
-		return;
-	}
-	jpeg_create_decompress(&dinfo);
-	jpeg_stdio_src(&dinfo, infile);
-	(void)jpeg_read_header(&dinfo, FALSE);
-
-	dinfo_width = dinfo.image_width;
-	dinfo_height = dinfo.image_height;
-
-	/* ratio needed to scale image correctly. */
-	ratio = (double)dinfo_width / (double)dinfo_height;
-	img_scaleheight = g_flags.scaleheight;
-	img_scalewidth = (int)((double)img_scaleheight * ratio + 0.5);
-	/* TODO(pts): Fix too large width. */
-	/* Is the image smaller than the thumbnail? */
-	if (img_scaleheight >= dinfo_height && img_scalewidth >= dinfo_width) {
-		if (g_flags.also_small) {
-			/* Re-encode JPEG in original size. */
-			img_scaleheight = dinfo_height;
-			img_scalewidth = dinfo_width;
-		} else {
-			/* Skip creating the thumbnail. */
-			jpeg_destroy_decompress(&dinfo);
-			fclose(infile);
-			return;
-		}
-	}
-
-	/*
-	 * If the image is not cached, we need to read it in,
-	 * resize it, and write it out.
-	 */
-	if ((outfile = fopen(tmp, "wb")) == NULL) {
-		fprintf(stderr, "%s: can't fopen(%s): %s\n",
-		    g_flags.progname, tmp, strerror(errno));
-		jpeg_destroy_decompress(&dinfo);
-		fclose(infile);
-		g_flags.exit_code = EXIT_FAILURE;
-		return;
-	}
-
-	/*
-	 * Use libjpeg's handy feature to downscale the
-	 * original on the fly while reading it in.
-	 */
-	if (dinfo_width >= 8 * img_scalewidth)
-		dinfo.scale_denom = 8;
-	else if (dinfo_width >= 4 * img_scalewidth)
-		dinfo.scale_denom = 4;
-	else if (dinfo_width >= 2 * img_scalewidth)
-		dinfo.scale_denom = 2;
-
-	has_decompress_started = 1;
-	jpeg_start_decompress(&dinfo);
-	row_width = dinfo.output_width * dinfo.num_components;
-	check_alloc(p = malloc(row_width * dinfo.output_height * sizeof(unsigned char)));
-	samp = (*dinfo.mem->alloc_sarray)
-	    ((j_common_ptr)&dinfo, JPOOL_IMAGE, row_width, 1);
-
-	/* Read the image into memory. */
-	n = 0;
-	while (dinfo.output_scanline < dinfo.output_height) {
-		jpeg_read_scanlines(&dinfo, samp, 1);
-		memcpy(&p[n*row_width], *samp, row_width * sizeof(char));
-		n++;
-	}
-	jpeg_finish_decompress(&dinfo);
-	jpeg_destroy_decompress(&dinfo);
-	/* if (setjmp(...)) above can't happen anymore. */
-	fclose(infile);
+	if (!load_image(img, filename, tmp_filename)) return;
 
 	/* Resize the image. */
-	img_datasize = img_scalewidth * img_scaleheight * dinfo.num_components;
+	img_datasize = img->scalewidth * img->scaleheight * img->num_components;
 #if 0
-	fprintf(stderr, "img_scalewidth=%d img_scaleheight=%d dinfo.num_components=%d img_datasize=%d\n", img_scalewidth, img_scaleheight, dinfo.num_components, img_datasize);
-	fprintf(stderr, "dinfo.output_width=%d dinfo.output_height=%d s_row_width=%d\n", dinfo.output_width, dinfo.output_height, dinfo.output_width * dinfo.num_components);
+	fprintf(stderr, "img->scalewidth=%d img->scaleheight=%d img->num_components=%d img_datasize=%d\n", img->scalewidth, img->scaleheight, img->num_components, img_datasize);
+	fprintf(stderr, "img->output_width=%d img->output_height=%d s_row_width=%d\n", img->output_width, img->output_height, img->output_width * img->num_components);
 #endif
-	/* Typically, if dinfo.output_width == img_scalewidth, then the heights are also the same.
-	 * A notable excaption when it is +1: input JPEG 700x961, -H 480, dinfo.scale_denom=2, dinfo.output_width=350 dinfo.output_height=481.
+	/* Typically, if img->output_width == img->scalewidth, then the heights are also the same.
+	 * A notable excaption when it is +1: input JPEG 700x961, -H 480, img->scale_denom=2, img->output_width=350 img->output_height=481.
 	 */
-	if (dinfo.output_width == img_scalewidth &&
-	    (dinfo.output_height == img_scaleheight || dinfo.output_height == img_scaleheight + 1)) {
+	if (img->output_width == img->scalewidth &&
+	    (img->output_height == img->scaleheight || img->output_height == img->scaleheight + 1)) {
 		/* No scaling needed, input (p) is already of the right size.
 		 * We ignore the last row of p in the +1 case.
 		 */
-		o = p;
+		o = img->data;
 	} else {
 		check_alloc(o = malloc(img_datasize * sizeof(unsigned char)));
 		resize_func = g_flags.bilinear ? resize_bilinear : resize_bicubic;
-		resize_func(&dinfo, img_scalewidth, img_scaleheight, p, o);
-		free(p);
+		resize_func(img->num_components, img->output_width, img->output_height, img->scalewidth, img->scaleheight, img->data, o);
+		free(img->data);
 	}
-	p = NULL;  /* Extra carefulness to prevent a double free. */
+	img->data = NULL;  /* Extra carefulness to prevent a double free. */
 
 	/* Prepare the compression object. */
+	cinfo.err = jpeg_std_error(&cerr);
 	jpeg_create_compress(&cinfo);
-	jpeg_stdio_dest(&cinfo, outfile);
-	cinfo.image_width = img_scalewidth;
-	cinfo.image_height = img_scaleheight;
-	cinfo.input_components = dinfo.num_components;
-	cinfo.in_color_space = dinfo.out_color_space;
+	jpeg_stdio_dest(&cinfo, img->outfile);
+	cinfo.image_width = img->scalewidth;
+	cinfo.image_height = img->scaleheight;
+	cinfo.input_components = img->num_components;
+	cinfo.in_color_space = img->colorspace;
 	jpeg_set_defaults(&cinfo);
 	jpeg_set_quality(&cinfo, 50, FALSE);  /* TODO(pts): Make quality configurable. */
 
@@ -507,7 +537,7 @@ static void create_thumbnail(char *filename) {
 	{
 		char comment_text[16 + sizeof(unsigned) * 6];
 		sprintf(comment_text, "REALDIMEN:%ux%u",
-		        dinfo_width, dinfo_height);
+		        img->width, img->height);
 		jpeg_write_marker(&cinfo, JPEG_COM, (void*)comment_text,
 		                  strlen(comment_text));
 	}
@@ -517,26 +547,26 @@ static void create_thumbnail(char *filename) {
 		jpeg_write_scanlines(&cinfo, row_pointer, 1);
 	}
 	jpeg_finish_compress(&cinfo);
-	fflush(outfile);
-	if (ferror(outfile)) {
-		fprintf(stderr, "%s: error writing data to: %s\n", g_flags.progname, tmp);
-		fclose(outfile);
+	fflush(img->outfile);
+	if (ferror(img->outfile)) {
+		fprintf(stderr, "%s: error writing data to: %s\n", g_flags.progname, tmp_filename);
+		fclose(img->outfile);
 		jpeg_destroy_compress(&cinfo);
 		free(o);
-		unlink(tmp);
+		unlink(tmp_filename);
 		g_flags.exit_code = EXIT_FAILURE;
 		return;
 	}
-	fclose(outfile);
-	outfile = NULL;
+	fclose(img->outfile);
+	img->outfile = NULL;
 	jpeg_destroy_compress(&cinfo);
 	free(o);
 
-	if (rename(tmp, final)) {
+	if (rename(tmp_filename, final)) {
 		fprintf(stderr, "%s: can't rename(%s, %s): "
-		    "%s\n", g_flags.progname, tmp, final,
+		    "%s\n", g_flags.progname, tmp_filename, final,
 		    strerror(errno));
-		unlink(tmp);
+		unlink(tmp_filename);
 		g_flags.exit_code = EXIT_FAILURE;
 		return;
 	}
@@ -619,7 +649,7 @@ usage(void)
  * Scaling is done with a bicubic algorithm (stolen from ImageMagick :-)).
  */
 static void resize_bicubic(
-    struct jpeg_decompress_struct *dinfo,
+    unsigned num_components, unsigned output_width, unsigned output_height,
     unsigned out_width, unsigned out_height, const unsigned char *p,
     unsigned char *o) {
 	unsigned char *x_vector;
@@ -629,10 +659,10 @@ static void resize_bicubic(
 	double *t, x_scale, x_span, y_scale, y_span, *y_vector;
 
 	/* RGB images have 3 components, grayscale images have only one. */
-	comp = dinfo->num_components;
-	s_row_width = dinfo->output_width * comp;
+	comp = num_components;
+	s_row_width = output_width * comp;
 	t_row_width = out_width  * comp;
-	factor = (double)out_width / (double)dinfo->output_width;
+	factor = (double)out_width / (double)output_width;
 
 	check_alloc(x_vector = malloc(s_row_width * sizeof(unsigned char)));
 	check_alloc(y_vector = malloc(s_row_width * sizeof(double)));
@@ -652,7 +682,7 @@ static void resize_bicubic(
 
 		/* Scale Y-dimension. */
 		while (y_scale < y_span) {
-			if (next_row && num_rows < dinfo->output_height) {
+			if (next_row && num_rows < output_height) {
 				/* Read a new scanline.  */
 				memcpy(x_vector, p, s_row_width * sizeof(unsigned char));
 				p += s_row_width;
@@ -664,7 +694,7 @@ static void resize_bicubic(
 			y_scale  = factor;
 			next_row = 1;
 		}
-		if (next_row && num_rows < dinfo->output_height) {
+		if (next_row && num_rows < output_height) {
 			/* Read a new scanline.  */
 			memcpy(x_vector, p, s_row_width * sizeof(unsigned char));
 			p += s_row_width;
@@ -690,7 +720,7 @@ static void resize_bicubic(
 		t = scale_scanline;
 
 		/* Scale X dimension. */
-		for (x = 0; x < dinfo->output_width; x++) {
+		for (x = 0; x < output_width; x++) {
 			x_scale = factor;
 			while (x_scale >= x_span) {
 				if (next_col)
@@ -738,17 +768,18 @@ static void resize_bicubic(
  * Scaling is done with a bilinear algorithm.
  */
 static void resize_bilinear(
-    struct jpeg_decompress_struct *dinfo,
+    unsigned num_components, unsigned output_width, unsigned output_height,
     unsigned out_width, unsigned out_height, const unsigned char *p,
     unsigned char *o) {
 	double factor, fraction_x, fraction_y, one_minus_x, one_minus_y;
 	unsigned ceil_x, ceil_y, floor_x, floor_y, s_row_width;
 	unsigned tcx, tcy, tfx, tfy, tx, ty, t_row_width, x, y;
+	(void)output_height;
 
 	/* RGB images have 3 components, grayscale images have only one. */
-	s_row_width = dinfo->num_components * dinfo->output_width;
-	t_row_width = dinfo->num_components * out_width;
-	factor = (double)dinfo->output_width / (double)out_width;
+	s_row_width = num_components * output_width;
+	t_row_width = num_components * out_width;
+	factor = (double)output_width / (double)out_width;
 	for (y = 0; y < out_height; y++) {
 		for (x = 0; x < out_width; x++) {
 			floor_x = (unsigned)(x * factor);
@@ -764,11 +795,11 @@ static void resize_bilinear(
 			one_minus_x = 1.0 - fraction_x;
 			one_minus_y = 1.0 - fraction_y;
 
-			tx  = x * dinfo->num_components;
+			tx  = x * num_components;
 			ty  = y * t_row_width;
-			tfx = floor_x * dinfo->num_components;
+			tfx = floor_x * num_components;
 			tfy = floor_y * s_row_width;
-			tcx = ceil_x * dinfo->num_components;
+			tcx = ceil_x * num_components;
 			tcy = ceil_y * s_row_width;
 
 			o[tx + ty] = one_minus_y *
@@ -777,7 +808,7 @@ static void resize_bilinear(
 			    fraction_y * (one_minus_x * p[tfx + tcy] +
 			    fraction_x  * p[tcx + tcy]);
 
-			if (dinfo->num_components != 1) {
+			if (num_components != 1) {
 				o[tx + ty + 1] = one_minus_y *
 				    (one_minus_x * p[tfx + tfy + 1] +
 				    fraction_x * p[tcx + tfy + 1]) +
