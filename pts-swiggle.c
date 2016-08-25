@@ -44,7 +44,6 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
-#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,7 +57,12 @@
 #include <strings.h>
 #endif
 
+/* This needs to be moved above #include <setjmp.h> */
+#include <png.h>	/* includes zlib.h and setjmp.h */
+
 #include <jpeglib.h>
+
+#include <setjmp.h>
 
 #include "cgif.h"
 
@@ -97,6 +101,9 @@ static void check_alloc(const void *p) {
 		abort();
 	}
 }
+
+/* --- */
+
 
 /*
  * swiggle generates a web image gallery. It scales down images in
@@ -413,15 +420,578 @@ static char load_image_gif(struct image *img, const char *filename, FILE *infile
 	return 1;
 }
 
-static char load_image_png(struct image *img, const char *filename, FILE *infile, const char *tmp_filename) {
-	(void)img;
-	(void)infile;
-	(void)tmp_filename;
+/* --- PNG support */
 
-	fprintf(stderr, "%s: PNG files not supported yet: %s\n", g_flags.progname, filename);
-	g_flags.exit_code = EXIT_FAILURE;
-	return 0;
+/* !! no fatal errors, with cleanups (free) */
+/* !! make sure alpha channel mixing works */
+
+/*
+** based on png22pnm.c
+** edited by pts@fazekas.hu at Tue Dec 10 16:33:53 CET 2002
+**
+** png22pnm.c has been tested with libpng 1.2 and 1.5. It should work with
+** libpng 1.2 or later. Compatiblity with libpng versions earlier than 1.2 is
+** not a goal.
+**
+** based on pngtopnm.c -
+** read a Portable Network Graphics file and produce a portable anymap
+**
+** Copyright (C) 1995,1998 by Alexander Lehmann <alex@hal.rhein-main.de>
+**                        and Willem van Schaik <willem@schaik.com>
+**
+** Permission to use, copy, modify, and distribute this software and its
+** documentation for any purpose and without fee is hereby granted, provided
+** that the above copyright notice appear in all copies and that both that
+** copyright notice and this permission notice appear in supporting
+** documentation.  This software is provided "as is" without express or
+** implied warranty.
+**
+** modeled after giftopnm by David Koblas and
+** with lots of bits pasted from libpng.txt by Guy Eric Schalnat
+*/
+
+/*
+   BJH 20000408:  rename PPM_MAXMAXVAL to PPM_OVERALLMAXVAL
+   BJH 20000303:  fix include statement so dependencies work out right.
+*/
+/* GRR 19991203:  moved VERSION to new version.h header file */
+
+/* GRR 19990713:  fixed redundant freeing of png_ptr and info_ptr in setjmp()
+ *  blocks and added "pm_close(ifp)" in each.  */
+
+/* GRR 19990317:  declared "clobberable" automatic variables in convertpng()
+ *  static to fix Solaris/gcc stack-corruption bug.  Also installed custom
+ *  error-handler to avoid jmp_buf size-related problems (i.e., jmp_buf
+ *  compiled with one size in libpng and another size here).  */
+
+#include <math.h>
+#include <png.h>	/* includes zlib.h and setjmp.h */
+
+/**** pts ****/
+#define PPM_OVERALLMAXVAL 65535
+
+typedef struct _jmpbuf_wrapper {
+  jmp_buf jmpbuf;
+} jmpbuf_wrapper;
+
+/* GRR 19991205:  this is used as a test for pre-1999 versions of netpbm and
+ *   pbmplus vs. 1999 or later (in which pm_close was split into two)
+ */
+
+#ifndef TRUE
+#  define TRUE 1
+#endif
+#ifndef FALSE
+#  define FALSE 0
+#endif
+
+/**** pts ****/
+typedef unsigned dimen_t;
+/* typedef unsigned char xel[4]; */ /* "RGBA" */
+typedef unsigned pixval;
+#define pm_error printf /* !! stderr */
+#define pm_errexit() exit(3)
+#define pm_keymatch(stra, strb, _x) (0==strcmp((stra),(strb)))
+#define PPM_MAXMAXVAL 1023
+typedef unsigned long pixel;
+#define PPM_GETR(p) (((p) & 0x3ff00000) >> 20)
+#define PPM_GETG(p) (((p) & 0xffc00) >> 10)
+#define PPM_GETB(p) ((p) & 0x3ff)
+#define PPM_ASSIGN(p,red,grn,blu) (p) = ((pixel) (red) << 20) | ((pixel) (grn) << 10) | (pixel) (blu)
+#define PPM_EQUAL(p,q) ((p) == (q))
+
+#define PNM_ASSIGN1(x,v) PPM_ASSIGN(x,0,0,v)
+#define PNM_GET1(x) PPM_GETB(x)
+typedef pixel xel;
+typedef pixval xelval;
+
+static png_uint_16 _get_png_val (png_byte **pp, int bit_depth);
+static void store_pixel (xel *pix, png_uint_16 r, png_uint_16 g, png_uint_16 b, png_uint_16 a);
+static void pngtopnm_error_handler (png_structp png_ptr, png_const_charp msg);
+
+enum alpha_handling {none, alpha_only, mix_only};
+
+/* !! get rid of these global variables */
+static png_uint_16 maxval, maxmaxval;
+static png_uint_16 bgr, bgg, bgb; /* background colors */
+static enum alpha_handling alpha = none;
+static int do_background = -1;
+static float displaygamma = -1.0; /* display gamma */
+static float totalgamma = -1.0;
+static jmpbuf_wrapper pngtopnm_jmpbuf_struct;
+
+#define get_png_val(p) _get_png_val (&(p), bit_depth)
+
+static png_uint_16 _get_png_val (png_byte **pp, int bit_depth) {
+  png_uint_16 c = 0;
+
+  if (bit_depth == 16) {
+    c = (*((*pp)++)) << 8;
+  }
+  c |= (*((*pp)++));
+
+  if (maxval > maxmaxval)
+    c /= ((maxval + 1) / (maxmaxval + 1));
+
+  return c;
 }
+
+static void store_pixel (xel *pix, png_uint_16 r, png_uint_16 g, png_uint_16 b, png_uint_16 a) {
+  if (alpha == alpha_only) {
+    PNM_ASSIGN1 (*pix, a);
+  } else {
+    if (((alpha == mix_only) /*|| (alpha == mix_and_alpha)*/) && (a != maxval)) {
+      r = r * (double)a / maxval + ((1.0 - (double)a / maxval) * bgr);
+      g = g * (double)a / maxval + ((1.0 - (double)a / maxval) * bgg);
+      b = b * (double)a / maxval + ((1.0 - (double)a / maxval) * bgb);
+    }
+    PPM_ASSIGN (*pix, r, g, b);
+  }
+}
+
+static png_uint_16 gamma_correct (png_uint_16 v, float g) {
+  if (g != -1.0)
+    return (png_uint_16) (pow ((double) v / maxval,
+			       (1.0 / g)) * maxval + 0.5);
+  else
+    return v;
+}
+
+static void pngtopnm_error_handler (png_structp png_ptr, png_const_charp msg) {
+  jmpbuf_wrapper  *jmpbuf_ptr;
+
+  /* this function, aside from the extra step of retrieving the "error
+   * pointer" (below) and the fact that it exists within the application
+   * rather than within libpng, is essentially identical to libpng's
+   * default error handler.  The second point is critical:  since both
+   * setjmp() and longjmp() are called from the same code, they are
+   * guaranteed to have compatible notions of how big a jmp_buf is,
+   * regardless of whether _BSD_SOURCE or anything else has (or has not)
+   * been defined. */
+
+  fprintf(stderr, "pnmtopng:  fatal libpng error: %s\n", msg);
+  fflush(stderr);
+
+  jmpbuf_ptr = png_get_error_ptr(png_ptr);
+  if (jmpbuf_ptr == NULL) {         /* we are completely hosed now */
+    fprintf(stderr,
+      "pnmtopng:  EXTREMELY fatal error: jmpbuf unrecoverable; terminating.\n");
+    fflush(stderr);
+    exit(99);
+  }
+
+  longjmp(jmpbuf_ptr->jmpbuf, 1);
+}
+
+#define SIG_CHECK_SIZE 4
+
+static char load_image_png(struct image *img, const char *filename, FILE *infile, const char *tmp_filename) {
+  unsigned char sig_buf [SIG_CHECK_SIZE];
+  png_struct *png_ptr;
+  png_info *info_ptr;
+  png_byte **png_image;
+  png_byte *png_pixel;
+  png_uint_32 width;
+  png_uint_32 height;
+  pixel pnm_pixel;
+  int bit_depth;
+  png_byte color_type;
+  png_color_16p background;
+  double gamma;
+  png_bytep trans_alpha;
+  int num_trans;
+  png_color_16p trans_color;
+  png_color_8p sig_bit;
+  int num_palette;
+  png_colorp palette;
+  png_uint_32 x_pixels_per_unit, y_pixels_per_unit;
+  int phys_unit_type;
+  int has_phys;
+  int x, y;
+  int linesize;
+  png_uint_16 c, c2, c3, a;
+  int i;
+  int trans_mix;
+  pixel backcolor;
+  unsigned char *pr;
+  (void)filename;
+
+  alpha = none;
+  do_background = -1;
+  displaygamma = -1.0; /* display gamma */
+  totalgamma = -1.0;
+
+  /* alpha = alpha_only; */
+  /* alpha = none; */
+  alpha = mix_only;
+  do_background = 1;
+  /* displaygamma = ... */
+
+  if (fread (sig_buf, 1, SIG_CHECK_SIZE, infile) != SIG_CHECK_SIZE) {
+    { pm_error ("input file empty or too short"); exit(1); }
+  }
+  if (png_sig_cmp (sig_buf, (png_size_t) 0, (png_size_t) SIG_CHECK_SIZE) != 0) {
+    { pm_error ("input file not a PNG file"); exit(1); }
+  }
+
+  png_ptr = png_create_read_struct (PNG_LIBPNG_VER_STRING,
+    &pngtopnm_jmpbuf_struct, pngtopnm_error_handler, NULL);
+  if (png_ptr == NULL) {
+    { pm_error ("cannot allocate LIBPNG structure"); exit(1); }
+  }
+
+  info_ptr = png_create_info_struct (png_ptr);
+  if (info_ptr == NULL) {
+    png_destroy_read_struct (&png_ptr, (png_infopp)NULL, (png_infopp)NULL);
+    { pm_error ("cannot allocate LIBPNG structures"); exit(1); }
+  }
+
+  if (setjmp (pngtopnm_jmpbuf_struct.jmpbuf)) {
+    png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
+    { pm_error ("setjmp returns error condition"); exit(1); }
+  }
+
+  png_init_io (png_ptr, infile);
+  png_set_sig_bytes (png_ptr, SIG_CHECK_SIZE);
+  png_read_info (png_ptr, info_ptr);
+
+  bit_depth = png_get_bit_depth(png_ptr, info_ptr);
+  color_type = png_get_color_type(png_ptr, info_ptr);
+  width = png_get_image_width(png_ptr, info_ptr);
+  height = png_get_image_height(png_ptr, info_ptr);
+
+  img->num_components = 3;
+  img->width = img->output_width = width;
+  img->height = img->output_height = height;
+  img->colorspace = JCS_RGB;
+
+  if (!compute_scaledims(img, 0)) {
+    png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
+    return 0;
+  }
+
+  if ((img->outfile = fopen(tmp_filename, "wb")) == NULL) {
+    png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
+    fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname, tmp_filename, strerror(errno));
+    g_flags.exit_code = EXIT_FAILURE;
+    return 0;
+  }
+
+  if (png_get_valid(png_ptr, info_ptr, PNG_INFO_bKGD)) {
+    png_get_bKGD(png_ptr, info_ptr, &background);
+  } else {
+    background = NULL;
+  }
+  if (png_get_valid(png_ptr, info_ptr, PNG_INFO_gAMA)) {
+    png_get_gAMA(png_ptr, info_ptr, &gamma);
+  } else {
+    gamma = -1;
+  }
+  if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) {
+    png_get_tRNS(png_ptr, info_ptr, &trans_alpha, &num_trans, &trans_color);
+  } else {
+    trans_alpha = NULL;
+    num_trans = 0;
+    trans_color = NULL;
+  }
+  if (png_get_valid(png_ptr, info_ptr, PNG_INFO_PLTE)) {
+    png_get_PLTE(png_ptr, info_ptr, &palette, &num_palette);
+  } else {
+    palette = NULL;
+    num_palette = 0;
+  }
+  if (png_get_valid(png_ptr, info_ptr, PNG_INFO_sBIT)) {
+    png_get_sBIT(png_ptr, info_ptr, &sig_bit);
+  } else {
+    sig_bit = NULL;
+  }
+  if (0 != (has_phys = png_get_valid(png_ptr, info_ptr, PNG_INFO_pHYs))) {
+    png_get_pHYs(png_ptr, info_ptr, &x_pixels_per_unit, &y_pixels_per_unit,
+                 &phys_unit_type);
+  }
+
+  png_image = (png_byte **)malloc (height * sizeof (png_byte*));
+  if (png_image == NULL) {
+    png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
+    { pm_error ("couldn't allocate space for image"); exit(1); }
+  }
+
+  if (bit_depth == 16)
+    linesize = 2 * width;
+  else
+    linesize = width;
+
+  if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+    linesize *= 2;
+  else
+  if (color_type == PNG_COLOR_TYPE_RGB)
+    linesize *= 3;
+  else
+  if (color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+    linesize *= 4;
+
+  for (y = 0 ; y+0U < height ; y++) {
+    png_image[y] = malloc (linesize);
+    if (png_image[y] == NULL) {
+      for (x = 0 ; x < y ; x++)
+        free (png_image[x]);
+      free (png_image);
+      png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
+      { pm_error ("couldn't allocate space for image"); exit(1); }
+    }
+  }
+
+  if (bit_depth < 8)
+    png_set_packing (png_ptr);
+
+  if (color_type == PNG_COLOR_TYPE_PALETTE) {
+    maxval = 255;
+  } else {
+    maxval = (1l << bit_depth) - 1;
+  }
+
+  /* gamma-correction */
+  if (displaygamma != -1.0) {
+    if (png_get_valid(png_ptr, info_ptr, PNG_INFO_gAMA)) {
+      if (displaygamma != gamma) {
+        png_set_gamma (png_ptr, displaygamma, gamma);
+	totalgamma = (double) gamma * (double) displaygamma;
+	/* in case of gamma-corrections, sBIT's as in the PNG-file are not valid anymore */
+	sig_bit = NULL;
+      }
+    } else {
+      if (displaygamma != gamma) {
+	png_set_gamma (png_ptr, displaygamma, 1.0);
+	totalgamma = (double) displaygamma;
+	sig_bit = NULL;
+      }
+    }
+  }
+
+  /* sBIT handling is very tricky. If we are extracting only the image, we
+     can use the sBIT info for grayscale and color images, if the three
+     values agree. If we extract the transparency/alpha mask, sBIT is
+     irrelevant for trans and valid for alpha. If we mix both, the
+     multiplication may result in values that require the normal bit depth,
+     so we will use the sBIT info only for transparency, if we know that only
+     solid and fully transparent is used */
+
+  if (sig_bit != NULL) {
+    switch (alpha) {
+      /*case mix_and_alpha: */
+      case mix_only:
+        if (color_type == PNG_COLOR_TYPE_RGB_ALPHA ||
+            color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+          break;
+        if (color_type == PNG_COLOR_TYPE_PALETTE &&
+            png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) {
+          trans_mix = TRUE;
+          for (i = 0 ; i < num_trans ; i++)
+            if (trans_alpha[i] != 0 && trans_alpha[i] != 255) {
+              trans_mix = FALSE;
+              break;
+            }
+          if (!trans_mix)
+            break;
+        }
+
+        /* else fall though to normal case */
+
+      case none:
+        if ((color_type == PNG_COLOR_TYPE_PALETTE ||
+             color_type == PNG_COLOR_TYPE_RGB ||
+             color_type == PNG_COLOR_TYPE_RGB_ALPHA) &&
+            (sig_bit->red != sig_bit->green ||
+             sig_bit->red != sig_bit->blue) &&
+            alpha == none) {
+#if 0
+	  pm_message ("different bit depths for color channels not supported");
+	  pm_message ("writing file with %d bit resolution", bit_depth);
+#endif
+        } else {
+          if ((color_type == PNG_COLOR_TYPE_PALETTE) &&
+	      (sig_bit->red < 255)) {
+	    for (i = 0 ; i < num_palette ; i++) {
+	      palette[i].red   >>= (8 - sig_bit->red);
+	      palette[i].green >>= (8 - sig_bit->green);
+	      palette[i].blue  >>= (8 - sig_bit->blue);
+	    }
+	    maxval = (1l << sig_bit->red) - 1;
+          } else
+          if ((color_type == PNG_COLOR_TYPE_RGB ||
+               color_type == PNG_COLOR_TYPE_RGB_ALPHA) &&
+	      (sig_bit->red < bit_depth)) {
+	    png_set_shift (png_ptr, sig_bit);
+	    maxval = (1l << sig_bit->red) - 1;
+          } else
+          if ((color_type == PNG_COLOR_TYPE_GRAY ||
+               color_type == PNG_COLOR_TYPE_GRAY_ALPHA) &&
+	      (sig_bit->gray < bit_depth)) {
+	    png_set_shift (png_ptr, sig_bit);
+	    maxval = (1l << sig_bit->gray) - 1;
+          }
+        }
+        break;
+
+      case alpha_only:
+        if ((color_type == PNG_COLOR_TYPE_RGB_ALPHA ||
+             color_type == PNG_COLOR_TYPE_GRAY_ALPHA) &&
+	    (sig_bit->gray < bit_depth)) {
+	  png_set_shift (png_ptr, sig_bit);
+	  maxval = (1l << sig_bit->alpha) - 1;
+        }
+        break;
+
+      }
+  }
+
+  /* didn't manage to get libpng to work (bugs?) concerning background */
+  /* processing, therefore we do our own using bgr, bgg and bgb        */
+
+  if (background != NULL)
+    switch (color_type) {
+      case PNG_COLOR_TYPE_GRAY:
+      case PNG_COLOR_TYPE_GRAY_ALPHA:
+        bgr = bgg = bgb = gamma_correct (background->gray, totalgamma);
+        break;
+      case PNG_COLOR_TYPE_PALETTE:
+        bgr = gamma_correct (palette[background->index].red, totalgamma);
+        bgg = gamma_correct (palette[background->index].green, totalgamma);
+        bgb = gamma_correct (palette[background->index].blue, totalgamma);
+        break;
+      case PNG_COLOR_TYPE_RGB:
+      case PNG_COLOR_TYPE_RGB_ALPHA:
+        bgr = gamma_correct (background->red, totalgamma);
+        bgg = gamma_correct (background->green, totalgamma);
+        bgb = gamma_correct (background->blue, totalgamma);
+        break;
+    }
+  else
+    /* when no background given, we use white [from version 2.37] */
+    bgr = bgg = bgb = maxval;
+
+  /* but if background was specified from the command-line, we always use that	*/
+  /* I chose to do no gamma-correction in this case; which is a bit arbitrary	*/
+  if (do_background > -1)
+  {
+    backcolor = 0;  /* Black. */
+    switch (color_type) {
+      case PNG_COLOR_TYPE_GRAY:
+      case PNG_COLOR_TYPE_GRAY_ALPHA:
+        bgr = bgg = bgb = PNM_GET1 (backcolor);
+        break;
+      case PNG_COLOR_TYPE_PALETTE:
+      case PNG_COLOR_TYPE_RGB:
+      case PNG_COLOR_TYPE_RGB_ALPHA:
+        bgr = PPM_GETR (backcolor);
+        bgg = PPM_GETG (backcolor);
+        bgb = PPM_GETB (backcolor);
+        break;
+    }
+  }
+
+  png_read_image (png_ptr, png_image);
+  png_read_end (png_ptr, info_ptr);
+
+#if 0
+  if (has_phys) {
+    double r;
+    r = (double)x_pixels_per_unit / y_pixels_per_unit;
+    if (r != 1.0) {
+      pm_message ("warning - non-square pixels; to fix do a 'pnmscale -%cscale %g'",
+		    r < 1.0 ? 'x' : 'y',
+		    r < 1.0 ? 1.0 / r : r );
+    }
+  }
+#endif
+
+  maxmaxval = maxval >= PPM_OVERALLMAXVAL ? PPM_OVERALLMAXVAL : maxval;
+
+  check_alloc(img->data = pr = malloc(3 * img->width * img->height * sizeof(unsigned char)));
+  for (y = 0 ; y+0U < height ; y++) {
+    png_pixel = png_image[y];
+    for (x = 0 ; x+0U < width ; x++) {
+      c = get_png_val (png_pixel);
+      switch (color_type) {
+        case PNG_COLOR_TYPE_GRAY:
+          store_pixel (&pnm_pixel, c, c, c,
+		(trans_color != NULL &&
+		 (c == gamma_correct (trans_color->gray, totalgamma))) ?
+			0 : maxval);
+          break;
+
+        case PNG_COLOR_TYPE_GRAY_ALPHA:
+          a = get_png_val (png_pixel);
+          store_pixel (&pnm_pixel, c, c, c, a);
+          break;
+
+        case PNG_COLOR_TYPE_PALETTE:
+          store_pixel (&pnm_pixel, palette[c].red,
+                       palette[c].green, palette[c].blue,
+                       (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) &&
+                        c < num_trans ? trans_alpha[c] : maxval);
+          break;
+
+        case PNG_COLOR_TYPE_RGB:
+          c2 = get_png_val (png_pixel);
+          c3 = get_png_val (png_pixel);
+          store_pixel (&pnm_pixel, c, c2, c3,
+		(trans_color != NULL &&
+		 (c  == gamma_correct (trans_color->red, totalgamma)) &&
+		 (c2 == gamma_correct (trans_color->green, totalgamma)) &&
+		 (c3 == gamma_correct (trans_color->blue, totalgamma))) ?
+			0 : maxval);
+          break;
+
+        case PNG_COLOR_TYPE_RGB_ALPHA:
+          c2 = get_png_val (png_pixel);
+          c3 = get_png_val (png_pixel);
+          a = get_png_val (png_pixel);
+          store_pixel (&pnm_pixel, c, c2, c3, a);
+          break;
+
+        default:  /* !! check earlier */
+          for (i = 0 ; i+0U < height ; i++)
+            free (png_image[i]);
+          free (png_image);
+          png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
+          { pm_error ("unknown PNG color type"); exit(1); }
+      }
+      /* TODO(pts): Shift down rather than maxval. */
+      if (maxval == 255) {
+        *pr++=PPM_GETR(pnm_pixel);
+        *pr++=PPM_GETG(pnm_pixel);
+        *pr++=PPM_GETB(pnm_pixel);
+      } else if (maxval == 1) {
+        *pr++=-PPM_GETR(pnm_pixel);
+        *pr++=-PPM_GETG(pnm_pixel);
+        *pr++=-PPM_GETB(pnm_pixel);
+      } else if (maxval == 15) {
+        *pr++=PPM_GETR(pnm_pixel) * 17;
+        *pr++=PPM_GETG(pnm_pixel) * 17;
+        *pr++=PPM_GETB(pnm_pixel) * 17;
+      } else if (maxval == 3) {
+        *pr++=PPM_GETR(pnm_pixel) * 85;
+        *pr++=PPM_GETG(pnm_pixel) * 85;
+        *pr++=PPM_GETB(pnm_pixel) * 85;
+      } else {
+        /* TODO(pts): Don't round. */
+        *pr++=PPM_GETR(pnm_pixel) * 255 / maxval;
+        *pr++=PPM_GETG(pnm_pixel) * 255 / maxval;
+        *pr++=PPM_GETB(pnm_pixel) * 255 / maxval;
+      }
+    }
+  }
+
+  for (y = 0 ; y+0U < height ; y++)
+    free(png_image[y]);
+  free(png_image);
+  png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
+
+  return 1;
+}
+
+/* --- */
 
 /* Called by load_image.
  * Returns whether the scaled image file should be produced.
@@ -429,7 +999,7 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
 static char load_image_jpeg(struct image *img, const char *filename, FILE *infile, const char *tmp_filename) {
         struct jpeg_decompress_struct dinfo;
         struct my_jpeg_error_mgr derrmgr;
-        unsigned char *pr; 
+        unsigned char *pr;
         char has_decompress_started = 0;
         unsigned row_width;
         JSAMPARRAY samp;
@@ -554,7 +1124,7 @@ static char load_image(struct image *img, const char *filename, const char *tmp_
 	fclose(infile);
 	return result;
 }
-	
+
 static void create_thumbnail(char *filename) {
 	/* TODO(pts): Don't use MAXPATHLEN. */
 	char final[MAXPATHLEN], tmp_filename[MAXPATHLEN];
