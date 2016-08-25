@@ -60,6 +60,8 @@
 
 #include <jpeglib.h>
 
+#include "cgif.h"
+
 #define	SWIGGLE_VERSION	"0.4-pts"
 
 static struct {
@@ -315,7 +317,6 @@ static void my_jpeg_error_exit(j_common_ptr cinfo) {
 }
 
 struct image {
-  /* dinfo fields. */
   unsigned num_components;
   unsigned width;
   unsigned height;
@@ -330,7 +331,7 @@ struct image {
 };
 
 /* Returns whether the scaled image file should be produced. */
-static char compute_scaledims(struct image *img) {
+static char compute_scaledims(struct image *img, char is_input_jpeg) {
 	/* ratio needed to scale image correctly. */
 	double ratio = (double)img->width / (double)img->height;
 	img->scaleheight = g_flags.scaleheight;
@@ -338,8 +339,8 @@ static char compute_scaledims(struct image *img) {
 	/* TODO(pts): Fix too large width. */
 	/* Is the image smaller than the thumbnail? */
 	if (img->scaleheight >= img->height && img->scalewidth >= img->width) {
-		if (g_flags.also_small) {
-			/* Re-encode JPEG in original size. */
+		if (!is_input_jpeg || g_flags.also_small) {
+			/* Re-encode to JPEG in original size. */
 			img->scaleheight = img->height;
 			img->scalewidth = img->width;
 		} else {
@@ -350,28 +351,90 @@ static char compute_scaledims(struct image *img) {
 	return 1;
 }
 
-/* Returns whether the scaled image file should be produced. */
-static char load_image(struct image *img, const char *filename, const char *tmp_filename) {
-	struct jpeg_decompress_struct dinfo;
-	struct my_jpeg_error_mgr derrmgr;
+/* Called by load_image.
+ * Returns whether the scaled image file should be produced.
+ */
+static char load_image_gif(struct image *img, const char *filename, FILE *infile, const char *tmp_filename) {
+	char const *err;
+	GifFileType *giff;
+	SavedImage *sp;
+	ColorMapObject *cm;
+	GifColorType *co;
+	unsigned c;
 	unsigned char *pr;
-	FILE *infile;
-	char has_decompress_started = 0;
-	unsigned row_width;
-	JSAMPARRAY samp;
+	const unsigned char *pi, *pi_end;
 
-	/*
-	 * Open the file and get some basic image information.
-	 */
-	if ((infile = fopen(filename, "rb")) == NULL) {
-		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname,
-		    filename, strerror(errno));
+	if (0==(giff=DGifOpenFILE(infile)) || GIF_ERROR==DGifSlurp(giff)) {
+		fprintf(stderr, "%s: error reading GIF file: %s: %s\n", g_flags.progname, filename, ((err=GetGifError()) ? err : "unknown error"));
+		g_flags.exit_code = EXIT_FAILURE;
+		if (giff) DGifCloseFile(giff);
+		return 0;
+	}
+	if (giff->ImageCount<1) {
+		fprintf(stderr, "%s: no image in GIF file: %s\n", g_flags.progname, filename);
+		g_flags.exit_code = EXIT_FAILURE;
+		DGifCloseFile(giff);
+		return 0;
+	}
+	sp = giff->SavedImages + 0;
+
+	img->num_components = 3;
+	img->width = img->output_width = sp->ImageDesc.Width;
+	img->height = img->output_height = sp->ImageDesc.Height;
+	img->colorspace = JCS_RGB;
+
+	if (!compute_scaledims(img, 0)) {
+		DGifCloseFile(giff);
+		return 0;
+	}
+
+	if ((img->outfile = fopen(tmp_filename, "wb")) == NULL) {
+		DGifCloseFile(giff);
+		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname, tmp_filename, strerror(errno));
 		g_flags.exit_code = EXIT_FAILURE;
 		return 0;
 	}
-	
-	img->data = NULL;
-	img->outfile = NULL;
+
+	cm = sp->ImageDesc.ColorMap ? sp->ImageDesc.ColorMap : giff->SColorMap;
+	co = cm->Colors;
+	c = img->num_components * img->width * img->height;
+	check_alloc(img->data = pr = malloc(c * sizeof(unsigned char)));
+	pi = (const unsigned char*)sp->RasterBits;
+	pi_end = pi + img->width * img->height;
+	while (pi != pi_end) {
+		GifColorType *coi = co + *pi++;
+		/* We could check if the color value is smaller than cm->ColorCount. */
+		*pr++ = coi->Red;
+		*pr++ = coi->Green;
+		*pr++ = coi->Blue;
+	}
+	/* sp->transp is the transparency color index: -1 or 0..255. We ignore it now. */
+	DGifCloseFile(giff);  /* Also frees memory. */
+	return 1;
+}
+
+static char load_image_png(struct image *img, const char *filename, FILE *infile, const char *tmp_filename) {
+	(void)img;
+	(void)infile;
+	(void)tmp_filename;
+
+	fprintf(stderr, "%s: PNG files not supported yet: %s\n", g_flags.progname, filename);
+	g_flags.exit_code = EXIT_FAILURE;
+	return 0;
+}
+
+/* Called by load_image.
+ * Returns whether the scaled image file should be produced.
+ */
+static char load_image_jpeg(struct image *img, const char *filename, FILE *infile, const char *tmp_filename) {
+        struct jpeg_decompress_struct dinfo;
+        struct my_jpeg_error_mgr derrmgr;
+        unsigned char *pr; 
+        char has_decompress_started = 0;
+        unsigned row_width;
+        JSAMPARRAY samp;
+	(void)filename;
+
 	dinfo.err = jpeg_std_error(&derrmgr.pub);
 	derrmgr.pub.error_exit = my_jpeg_error_exit;
 	if (setjmp(derrmgr.setjmp_buffer)) {
@@ -383,12 +446,6 @@ static char load_image(struct image *img, const char *filename, const char *tmp_
 		 */
 		if (has_decompress_started) jpeg_finish_decompress(&dinfo);
 		jpeg_destroy_decompress(&dinfo);
-		fclose(infile);
-		free(img->data);
-		if (img->outfile) {
-			fclose(img->outfile);
-			unlink(tmp_filename);
-		}
 		g_flags.exit_code = EXIT_FAILURE;
 		return 0;
 	}
@@ -400,9 +457,8 @@ static char load_image(struct image *img, const char *filename, const char *tmp_
 	img->height = dinfo.image_height;
 	img->num_components = dinfo.num_components;
 
-	if (!compute_scaledims(img)) {
+	if (!compute_scaledims(img, 1)) {
 		jpeg_destroy_decompress(&dinfo);
-		fclose(infile);
 		return 0;
 	}
 
@@ -411,10 +467,8 @@ static char load_image(struct image *img, const char *filename, const char *tmp_
 	 * resize it, and write it out.
 	 */
 	if ((img->outfile = fopen(tmp_filename, "wb")) == NULL) {
-		fprintf(stderr, "%s: can't fopen(%s): %s\n",
-		    g_flags.progname, tmp_filename, strerror(errno));
+		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname, tmp_filename, strerror(errno));
 		jpeg_destroy_decompress(&dinfo);
-		fclose(infile);
 		g_flags.exit_code = EXIT_FAILURE;
 		return 0;
 	}
@@ -450,10 +504,57 @@ static char load_image(struct image *img, const char *filename, const char *tmp_
 	jpeg_finish_decompress(&dinfo);
 	jpeg_destroy_decompress(&dinfo);
 	/* if (setjmp(...)) above can't happen anymore. */
-	fclose(infile);
 	return 1;
 }
 
+
+/* Returns whether the scaled image file should be produced. */
+static char load_image(struct image *img, const char *filename, const char *tmp_filename) {
+	FILE *infile;
+	char header[24];
+	unsigned header_size;
+	char result;
+
+	img->data = NULL;
+	img->outfile = NULL;
+
+	/*
+	 * Open the file and get some basic image information.
+	 */
+	if ((infile = fopen(filename, "rb")) == NULL) {
+		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname, filename, strerror(errno));
+		g_flags.exit_code = EXIT_FAILURE;
+		return 0;
+	}
+
+	header_size = fread(header, sizeof(char), sizeof(header), infile);
+	if (ferror(infile)) {
+		fprintf(stderr, "%s: can't read headers from %s: %s\n", g_flags.progname, filename, strerror(errno));
+		g_flags.exit_code = EXIT_FAILURE;
+		result = 0;
+	} else if (fseek(infile, 0, SEEK_SET) != 0) {
+		fprintf(stderr, "%s: can't seek in %s: %s\n", g_flags.progname, filename, strerror(errno));
+		g_flags.exit_code = EXIT_FAILURE;
+		result = 0;
+	} else if (header_size >= 4 && 0 == memcmp(header, "\xff\xd8\xff", 3)) {
+		result = load_image_jpeg(img, filename, infile, tmp_filename);
+	} else if (header_size >= 24 && 0 == memcmp(header, "\211PNG\r\n\032\n", 8)) {
+		result = load_image_png(img, filename, infile, tmp_filename);
+	} else if (header_size >= 7 && (0 == memcmp(header, "GIF87a", 6) || 0 == memcmp(header, "GIF89a", 6))) {
+		result = load_image_gif(img, filename, infile, tmp_filename);
+	} else if (header_size == 0) {
+		fprintf(stderr, "%s: empty image file: %s\n", g_flags.progname, filename);
+		g_flags.exit_code = EXIT_FAILURE;
+		result = 0;
+	} else {
+		fprintf(stderr, "%s: unknown image file format: %s\n", g_flags.progname, filename);
+		g_flags.exit_code = EXIT_FAILURE;
+		result = 0;
+	}
+	fclose(infile);
+	return result;
+}
+	
 static void create_thumbnail(char *filename) {
 	/* TODO(pts): Don't use MAXPATHLEN. */
 	char final[MAXPATHLEN], tmp_filename[MAXPATHLEN];
@@ -496,7 +597,14 @@ static void create_thumbnail(char *filename) {
 	 */
 	if (!g_flags.force && check_cache(final, &sb)) return;
 
-	if (!load_image(img, filename, tmp_filename)) return;
+	if (!load_image(img, filename, tmp_filename)) {
+		free(img->data);
+		if (img->outfile) {
+			fclose(img->outfile);
+			unlink(tmp_filename);
+		}
+		return;
+	}
 
 	/* Resize the image. */
 	img_datasize = img->scalewidth * img->scaleheight * img->num_components;
