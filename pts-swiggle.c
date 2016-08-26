@@ -422,8 +422,7 @@ static char load_image_gif(struct image *img, const char *filename, FILE *infile
 
 /* --- PNG support */
 
-/* !! no fatal errors, with cleanups (free) */
-/* !! make sure alpha channel mixing works */
+/* !! no fatal errors, with cleanups (free), no exit(...) */
 
 /*
 ** based on png22pnm.c
@@ -465,100 +464,31 @@ static char load_image_gif(struct image *img, const char *filename, FILE *infile
  *  compiled with one size in libpng and another size here).  */
 
 #include <math.h>
-#include <png.h>	/* includes zlib.h and setjmp.h */
-
-/**** pts ****/
-#define PPM_OVERALLMAXVAL 65535
-
-typedef struct _jmpbuf_wrapper {
-  jmp_buf jmpbuf;
-} jmpbuf_wrapper;
+#include <png.h> /* includes zlib.h and setjmp.h */
 
 /* GRR 19991205:  this is used as a test for pre-1999 versions of netpbm and
  *   pbmplus vs. 1999 or later (in which pm_close was split into two)
  */
 
-#ifndef TRUE
-#  define TRUE 1
-#endif
-#ifndef FALSE
-#  define FALSE 0
-#endif
+struct swigpng_jmpbuf_wrapper {
+  jmp_buf jmpbuf;
+};
 
-/**** pts ****/
-typedef unsigned dimen_t;
-/* typedef unsigned char xel[4]; */ /* "RGBA" */
-typedef unsigned pixval;
-#define pm_error printf /* !! stderr */
-#define pm_errexit() exit(3)
-#define pm_keymatch(stra, strb, _x) (0==strcmp((stra),(strb)))
-#define PPM_MAXMAXVAL 1023
-typedef unsigned long pixel;
-#define PPM_GETR(p) (((p) & 0x3ff00000) >> 20)
-#define PPM_GETG(p) (((p) & 0xffc00) >> 10)
-#define PPM_GETB(p) ((p) & 0x3ff)
-#define PPM_ASSIGN(p,red,grn,blu) (p) = ((pixel) (red) << 20) | ((pixel) (grn) << 10) | (pixel) (blu)
-#define PPM_EQUAL(p,q) ((p) == (q))
-
-#define PNM_ASSIGN1(x,v) PPM_ASSIGN(x,0,0,v)
-#define PNM_GET1(x) PPM_GETB(x)
-typedef pixel xel;
-typedef pixval xelval;
-
-static png_uint_16 _get_png_val (png_byte **pp, int bit_depth);
-static void store_pixel (xel *pix, png_uint_16 r, png_uint_16 g, png_uint_16 b, png_uint_16 a);
-static void pngtopnm_error_handler (png_structp png_ptr, png_const_charp msg);
-
-enum alpha_handling {none, alpha_only, mix_only};
-
-/* !! get rid of these global variables */
-static png_uint_16 maxval, maxmaxval;
-static png_uint_16 bgr, bgg, bgb; /* background colors */
-static enum alpha_handling alpha = none;
-static int do_background = -1;
-static float displaygamma = -1.0; /* display gamma */
-static float totalgamma = -1.0;
-static jmpbuf_wrapper pngtopnm_jmpbuf_struct;
-
-#define get_png_val(p) _get_png_val (&(p), bit_depth)
-
-static png_uint_16 _get_png_val (png_byte **pp, int bit_depth) {
-  png_uint_16 c = 0;
-
-  if (bit_depth == 16) {
-    c = (*((*pp)++)) << 8;
-  }
-  c |= (*((*pp)++));
-
-  if (maxval > maxmaxval)
-    c /= ((maxval + 1) / (maxmaxval + 1));
-
-  return c;
+/* TODO(pts): Speed this up for non-16-bit PNGs. */
+static png_uint_16 swigpng_get_png_val(png_byte **pp, int bit_depth) {
+  const png_uint_16 c = (bit_depth == 16) ? (*((*pp)++)) << 8 : 0;
+  return c | (*((*pp)++));
 }
 
-static void store_pixel (xel *pix, png_uint_16 r, png_uint_16 g, png_uint_16 b, png_uint_16 a) {
-  if (alpha == alpha_only) {
-    PNM_ASSIGN1 (*pix, a);
-  } else {
-    if (((alpha == mix_only) /*|| (alpha == mix_and_alpha)*/) && (a != maxval)) {
-      r = r * (double)a / maxval + ((1.0 - (double)a / maxval) * bgr);
-      g = g * (double)a / maxval + ((1.0 - (double)a / maxval) * bgg);
-      b = b * (double)a / maxval + ((1.0 - (double)a / maxval) * bgb);
-    }
-    PPM_ASSIGN (*pix, r, g, b);
-  }
-}
-
-static png_uint_16 gamma_correct (png_uint_16 v, float g) {
-  if (g != -1.0)
-    return (png_uint_16) (pow ((double) v / maxval,
-			       (1.0 / g)) * maxval + 0.5);
+static png_uint_16 swigpng_gamma_correct(png_uint_16 v, float gamma, float maxval) {
+  if (gamma != -1.0)
+    return (png_uint_16) (pow ((double) v / maxval, (1.0 / gamma)) * maxval + 0.5);
   else
     return v;
 }
 
-static void pngtopnm_error_handler (png_structp png_ptr, png_const_charp msg) {
-  jmpbuf_wrapper  *jmpbuf_ptr;
+static void swigpng_error_handler(png_structp png_ptr, png_const_charp msg) {
+  struct swigpng_jmpbuf_wrapper *jmpbuf_ptr;
 
   /* this function, aside from the extra step of retrieving the "error
    * pointer" (below) and the fact that it exists within the application
@@ -569,31 +499,22 @@ static void pngtopnm_error_handler (png_structp png_ptr, png_const_charp msg) {
    * regardless of whether _BSD_SOURCE or anything else has (or has not)
    * been defined. */
 
-  fprintf(stderr, "pnmtopng:  fatal libpng error: %s\n", msg);
+  fprintf(stderr, "fatal libpng error: %s\n", msg);
   fflush(stderr);
-
   jmpbuf_ptr = png_get_error_ptr(png_ptr);
-  if (jmpbuf_ptr == NULL) {         /* we are completely hosed now */
-    fprintf(stderr,
-      "pnmtopng:  EXTREMELY fatal error: jmpbuf unrecoverable; terminating.\n");
-    fflush(stderr);
-    exit(99);
-  }
-
+  if (jmpbuf_ptr == NULL) abort();  /* we are completely hosed now */
   longjmp(jmpbuf_ptr->jmpbuf, 1);
 }
 
-#define SIG_CHECK_SIZE 4
-
 static char load_image_png(struct image *img, const char *filename, FILE *infile, const char *tmp_filename) {
-  unsigned char sig_buf [SIG_CHECK_SIZE];
+  struct swigpng_jmpbuf_wrapper swigpng_jmpbuf_struct;
+  unsigned char sig_buf[4];
   png_struct *png_ptr;
   png_info *info_ptr;
   png_byte **png_image;
   png_byte *png_pixel;
   png_uint_32 width;
   png_uint_32 height;
-  pixel pnm_pixel;
   int bit_depth;
   png_byte color_type;
   png_color_16p background;
@@ -609,56 +530,52 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
   int has_phys;
   int x, y;
   int linesize;
-  png_uint_16 c, c2, c3, a;
+  png_uint_16 r, g, b, a, pi;
+  png_uint_16 trans_r, trans_g, trans_b, trans_gray;
   int i;
   int trans_mix;
-  pixel backcolor;
   unsigned char *pr;
+  png_uint_16 maxval;
+  png_uint_16 bgr, bgg, bgb;  /* Background colors. */
+  float displaygamma;
+  float totalgamma;
+  char do_mix;
   (void)filename;
 
-  alpha = none;
-  do_background = -1;
+  do_mix = 0;  /* TODO(pts): Remove support for this. */
   displaygamma = -1.0; /* display gamma */
   totalgamma = -1.0;
-
-  /* alpha = alpha_only; */
-  /* alpha = none; */
-  alpha = mix_only;
-  do_background = 1;
+  bgr = bgg = bgb = 0;  /* Black. qiv does #6f726d. */
+  do_mix = 1;
+  /* This (alpha channel mixing) works with both RGBA and palette. */
   /* displaygamma = ... */
 
-  if (fread (sig_buf, 1, SIG_CHECK_SIZE, infile) != SIG_CHECK_SIZE) {
-    { pm_error ("input file empty or too short"); exit(1); }
+  if (fread (sig_buf, 1, sizeof(sig_buf), infile) != sizeof(sig_buf)) {
+    { fprintf(stderr, "input file empty or too short\n"); exit(1); }
   }
-  if (png_sig_cmp (sig_buf, (png_size_t) 0, (png_size_t) SIG_CHECK_SIZE) != 0) {
-    { pm_error ("input file not a PNG file"); exit(1); }
-  }
-
-  png_ptr = png_create_read_struct (PNG_LIBPNG_VER_STRING,
-    &pngtopnm_jmpbuf_struct, pngtopnm_error_handler, NULL);
-  if (png_ptr == NULL) {
-    { pm_error ("cannot allocate LIBPNG structure"); exit(1); }
+  if (png_sig_cmp (sig_buf, (png_size_t) 0, (png_size_t) sizeof(sig_buf)) != 0) {
+    { fprintf(stderr, "input file not a PNG file\n"); exit(1); }
   }
 
-  info_ptr = png_create_info_struct (png_ptr);
-  if (info_ptr == NULL) {
-    png_destroy_read_struct (&png_ptr, (png_infopp)NULL, (png_infopp)NULL);
-    { pm_error ("cannot allocate LIBPNG structures"); exit(1); }
-  }
+  check_alloc(png_ptr = png_create_read_struct (PNG_LIBPNG_VER_STRING,
+    &swigpng_jmpbuf_struct, swigpng_error_handler, NULL));
 
-  if (setjmp (pngtopnm_jmpbuf_struct.jmpbuf)) {
+  check_alloc(info_ptr = png_create_info_struct (png_ptr));
+
+  if (setjmp(swigpng_jmpbuf_struct.jmpbuf)) {
     png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
-    { pm_error ("setjmp returns error condition"); exit(1); }
+    { fprintf(stderr, "setjmp found error\n"); exit(1); }
   }
 
   png_init_io (png_ptr, infile);
-  png_set_sig_bytes (png_ptr, SIG_CHECK_SIZE);
+  png_set_sig_bytes (png_ptr, sizeof(sig_buf));
   png_read_info (png_ptr, info_ptr);
 
   bit_depth = png_get_bit_depth(png_ptr, info_ptr);
   color_type = png_get_color_type(png_ptr, info_ptr);
   width = png_get_image_width(png_ptr, info_ptr);
   height = png_get_image_height(png_ptr, info_ptr);
+  maxval = (color_type == PNG_COLOR_TYPE_PALETTE) ? 255 : (1l << bit_depth) - 1;
 
   img->num_components = 3;
   img->width = img->output_width = width;
@@ -689,11 +606,21 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
   }
   if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) {
     png_get_tRNS(png_ptr, info_ptr, &trans_alpha, &num_trans, &trans_color);
+    if (num_trans == 0) num_trans = -1;
   } else {
     trans_alpha = NULL;
     num_trans = 0;
     trans_color = NULL;
   }
+  if (trans_color) {
+    trans_r = swigpng_gamma_correct(trans_color->red, totalgamma, maxval);
+    trans_g = swigpng_gamma_correct(trans_color->green, totalgamma, maxval);
+    trans_b = swigpng_gamma_correct(trans_color->blue, totalgamma, maxval);
+    trans_gray = swigpng_gamma_correct(trans_color->gray, totalgamma, maxval);
+  } else {
+    trans_r = trans_g = trans_b = trans_gray = 0;
+  }
+  
   if (png_get_valid(png_ptr, info_ptr, PNG_INFO_PLTE)) {
     png_get_PLTE(png_ptr, info_ptr, &palette, &num_palette);
   } else {
@@ -710,45 +637,27 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
                  &phys_unit_type);
   }
 
-  png_image = (png_byte **)malloc (height * sizeof (png_byte*));
-  if (png_image == NULL) {
-    png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
-    { pm_error ("couldn't allocate space for image"); exit(1); }
-  }
+  check_alloc(png_image = (png_byte **)malloc (height * sizeof (png_byte*)));
 
   if (bit_depth == 16)
     linesize = 2 * width;
   else
     linesize = width;
 
-  if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+  if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
     linesize *= 2;
-  else
-  if (color_type == PNG_COLOR_TYPE_RGB)
+  } else if (color_type == PNG_COLOR_TYPE_RGB) {
     linesize *= 3;
-  else
-  if (color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+  } else if (color_type == PNG_COLOR_TYPE_RGB_ALPHA) {
     linesize *= 4;
-
-  for (y = 0 ; y+0U < height ; y++) {
-    png_image[y] = malloc (linesize);
-    if (png_image[y] == NULL) {
-      for (x = 0 ; x < y ; x++)
-        free (png_image[x]);
-      free (png_image);
-      png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
-      { pm_error ("couldn't allocate space for image"); exit(1); }
-    }
+  } else if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_PALETTE) {
+  } else {
+    fprintf(stderr, "unknown PNG color type: %d\n", (int)color_type);
+    exit(1);
   }
 
   if (bit_depth < 8)
     png_set_packing (png_ptr);
-
-  if (color_type == PNG_COLOR_TYPE_PALETTE) {
-    maxval = 255;
-  } else {
-    maxval = (1l << bit_depth) - 1;
-  }
 
   /* gamma-correction */
   if (displaygamma != -1.0) {
@@ -777,18 +686,16 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
      solid and fully transparent is used */
 
   if (sig_bit != NULL) {
-    switch (alpha) {
-      /*case mix_and_alpha: */
-      case mix_only:
+    switch (do_mix) {
+      case 1:
         if (color_type == PNG_COLOR_TYPE_RGB_ALPHA ||
             color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
           break;
-        if (color_type == PNG_COLOR_TYPE_PALETTE &&
-            png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) {
-          trans_mix = TRUE;
+        if (color_type == PNG_COLOR_TYPE_PALETTE && num_trans != 0) {
+          trans_mix = 1;
           for (i = 0 ; i < num_trans ; i++)
             if (trans_alpha[i] != 0 && trans_alpha[i] != 255) {
-              trans_mix = FALSE;
+              trans_mix = 0;
               break;
             }
           if (!trans_mix)
@@ -797,13 +704,13 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
 
         /* else fall though to normal case */
 
-      case none:
+      case 0:
         if ((color_type == PNG_COLOR_TYPE_PALETTE ||
              color_type == PNG_COLOR_TYPE_RGB ||
              color_type == PNG_COLOR_TYPE_RGB_ALPHA) &&
             (sig_bit->red != sig_bit->green ||
              sig_bit->red != sig_bit->blue) &&
-            alpha == none) {
+            !do_mix) {
 #if 0
 	  pm_message ("different bit depths for color channels not supported");
 	  pm_message ("writing file with %d bit resolution", bit_depth);
@@ -832,16 +739,6 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
           }
         }
         break;
-
-      case alpha_only:
-        if ((color_type == PNG_COLOR_TYPE_RGB_ALPHA ||
-             color_type == PNG_COLOR_TYPE_GRAY_ALPHA) &&
-	    (sig_bit->gray < bit_depth)) {
-	  png_set_shift (png_ptr, sig_bit);
-	  maxval = (1l << sig_bit->alpha) - 1;
-        }
-        break;
-
       }
   }
 
@@ -852,142 +749,108 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
     switch (color_type) {
       case PNG_COLOR_TYPE_GRAY:
       case PNG_COLOR_TYPE_GRAY_ALPHA:
-        bgr = bgg = bgb = gamma_correct (background->gray, totalgamma);
+        bgr = bgg = bgb = swigpng_gamma_correct(background->gray, totalgamma, maxval);
         break;
       case PNG_COLOR_TYPE_PALETTE:
-        bgr = gamma_correct (palette[background->index].red, totalgamma);
-        bgg = gamma_correct (palette[background->index].green, totalgamma);
-        bgb = gamma_correct (palette[background->index].blue, totalgamma);
+        bgr = swigpng_gamma_correct(palette[background->index].red, totalgamma, maxval);
+        bgg = swigpng_gamma_correct(palette[background->index].green, totalgamma, maxval);
+        bgb = swigpng_gamma_correct(palette[background->index].blue, totalgamma, maxval);
         break;
       case PNG_COLOR_TYPE_RGB:
       case PNG_COLOR_TYPE_RGB_ALPHA:
-        bgr = gamma_correct (background->red, totalgamma);
-        bgg = gamma_correct (background->green, totalgamma);
-        bgb = gamma_correct (background->blue, totalgamma);
+        bgr = swigpng_gamma_correct(background->red, totalgamma, maxval);
+        bgg = swigpng_gamma_correct(background->green, totalgamma, maxval);
+        bgb = swigpng_gamma_correct(background->blue, totalgamma, maxval);
         break;
     }
-  else
-    /* when no background given, we use white [from version 2.37] */
-    bgr = bgg = bgb = maxval;
 
-  /* but if background was specified from the command-line, we always use that	*/
-  /* I chose to do no gamma-correction in this case; which is a bit arbitrary	*/
-  if (do_background > -1)
-  {
-    backcolor = 0;  /* Black. */
-    switch (color_type) {
-      case PNG_COLOR_TYPE_GRAY:
-      case PNG_COLOR_TYPE_GRAY_ALPHA:
-        bgr = bgg = bgb = PNM_GET1 (backcolor);
-        break;
-      case PNG_COLOR_TYPE_PALETTE:
-      case PNG_COLOR_TYPE_RGB:
-      case PNG_COLOR_TYPE_RGB_ALPHA:
-        bgr = PPM_GETR (backcolor);
-        bgg = PPM_GETG (backcolor);
-        bgb = PPM_GETB (backcolor);
-        break;
+  if (height > 0) {
+    check_alloc(png_image[0] = malloc(linesize * height));
+    for (y = 1 ; y+0U < height ; y++) {
+      png_image[y] = png_image[0] + linesize * y;
     }
   }
 
-  png_read_image (png_ptr, png_image);
-  png_read_end (png_ptr, info_ptr);
+  png_read_image(png_ptr, png_image);
+  png_read_end(png_ptr, info_ptr);
+  png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 
-#if 0
-  if (has_phys) {
-    double r;
-    r = (double)x_pixels_per_unit / y_pixels_per_unit;
-    if (r != 1.0) {
-      pm_message ("warning - non-square pixels; to fix do a 'pnmscale -%cscale %g'",
-		    r < 1.0 ? 'x' : 'y',
-		    r < 1.0 ? 1.0 / r : r );
-    }
-  }
-#endif
-
-  maxmaxval = maxval >= PPM_OVERALLMAXVAL ? PPM_OVERALLMAXVAL : maxval;
+  /* if (has_phys & x_pixels_per_unit != y_pixels_per_unit) warning("Non-square pixels."); */
 
   check_alloc(img->data = pr = malloc(3 * img->width * img->height * sizeof(unsigned char)));
+  /* TODO(pts): Can't libpng decode directly to RGB, with mixing and gamma correction? */
   for (y = 0 ; y+0U < height ; y++) {
     png_pixel = png_image[y];
     for (x = 0 ; x+0U < width ; x++) {
-      c = get_png_val (png_pixel);
+      r = swigpng_get_png_val(&png_pixel, bit_depth);
       switch (color_type) {
         case PNG_COLOR_TYPE_GRAY:
-          store_pixel (&pnm_pixel, c, c, c,
-		(trans_color != NULL &&
-		 (c == gamma_correct (trans_color->gray, totalgamma))) ?
-			0 : maxval);
+          g = b = r;
+          a = trans_color && r == trans_gray ? 0 : maxval;
           break;
 
         case PNG_COLOR_TYPE_GRAY_ALPHA:
-          a = get_png_val (png_pixel);
-          store_pixel (&pnm_pixel, c, c, c, a);
+          g = b = r;
+          a = swigpng_get_png_val(&png_pixel, bit_depth);
           break;
 
         case PNG_COLOR_TYPE_PALETTE:
-          store_pixel (&pnm_pixel, palette[c].red,
-                       palette[c].green, palette[c].blue,
-                       (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) &&
-                        c < num_trans ? trans_alpha[c] : maxval);
+          pi = r;
+          r = palette[pi].red;
+          g = palette[pi].green;
+          b = palette[pi].blue;
+          a = (int)pi < num_trans ? trans_alpha[pi] : maxval;
           break;
 
         case PNG_COLOR_TYPE_RGB:
-          c2 = get_png_val (png_pixel);
-          c3 = get_png_val (png_pixel);
-          store_pixel (&pnm_pixel, c, c2, c3,
-		(trans_color != NULL &&
-		 (c  == gamma_correct (trans_color->red, totalgamma)) &&
-		 (c2 == gamma_correct (trans_color->green, totalgamma)) &&
-		 (c3 == gamma_correct (trans_color->blue, totalgamma))) ?
-			0 : maxval);
+          g = swigpng_get_png_val(&png_pixel, bit_depth);
+          b = swigpng_get_png_val(&png_pixel, bit_depth);
+          a = (trans_color && r == trans_r && g == trans_g && b == trans_b) ? 0 : maxval;
           break;
 
         case PNG_COLOR_TYPE_RGB_ALPHA:
-          c2 = get_png_val (png_pixel);
-          c3 = get_png_val (png_pixel);
-          a = get_png_val (png_pixel);
-          store_pixel (&pnm_pixel, c, c2, c3, a);
+        default:  /* Nothing else supported. */
+          g = swigpng_get_png_val(&png_pixel, bit_depth);
+          b = swigpng_get_png_val(&png_pixel, bit_depth);
+          a = swigpng_get_png_val(&png_pixel, bit_depth);
           break;
-
-        default:  /* !! check earlier */
-          for (i = 0 ; i+0U < height ; i++)
-            free (png_image[i]);
-          free (png_image);
-          png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
-          { pm_error ("unknown PNG color type"); exit(1); }
       }
-      /* TODO(pts): Shift down rather than maxval. */
+      if (do_mix && a != maxval) {
+        /* TODO(pts): Convert to maxval=255 first, and only then mix, for better rounding. */
+        r = r * (double)a / maxval + ((1.0 - (double)a / maxval) * bgr);
+        g = g * (double)a / maxval + ((1.0 - (double)a / maxval) * bgg);
+        b = b * (double)a / maxval + ((1.0 - (double)a / maxval) * bgb);
+      }
       if (maxval == 255) {
-        *pr++=PPM_GETR(pnm_pixel);
-        *pr++=PPM_GETG(pnm_pixel);
-        *pr++=PPM_GETB(pnm_pixel);
-      } else if (maxval == 1) {
-        *pr++=-PPM_GETR(pnm_pixel);
-        *pr++=-PPM_GETG(pnm_pixel);
-        *pr++=-PPM_GETB(pnm_pixel);
+      } else if (maxval <= 1) {
+        r *= 255;
+        g *= 255;
+        b *= 255;
       } else if (maxval == 15) {
-        *pr++=PPM_GETR(pnm_pixel) * 17;
-        *pr++=PPM_GETG(pnm_pixel) * 17;
-        *pr++=PPM_GETB(pnm_pixel) * 17;
+        r *= 17;
+        g *= 17;
+        b *= 17;
       } else if (maxval == 3) {
-        *pr++=PPM_GETR(pnm_pixel) * 85;
-        *pr++=PPM_GETG(pnm_pixel) * 85;
-        *pr++=PPM_GETB(pnm_pixel) * 85;
-      } else {
-        /* TODO(pts): Don't round. */
-        *pr++=PPM_GETR(pnm_pixel) * 255 / maxval;
-        *pr++=PPM_GETG(pnm_pixel) * 255 / maxval;
-        *pr++=PPM_GETB(pnm_pixel) * 255 / maxval;
+        r *= 85;
+        g *= 85;
+        b *= 85;
+      } else if (maxval == 65535) {  /* 16-bit PNG. */
+        r >>= 8;
+        g >>= 8;
+        b >>= 8;
+      } else {  /* TODO(pts): Can this happen? */
+        r = (png_uint_32)r * 255 / maxval;
+        g = (png_uint_32)g * 255 / maxval;
+        b = (png_uint_32)b * 255 / maxval;
       }
+      *pr++ = r;
+      *pr++ = g;
+      *pr++ = b;
     }
   }
 
-  for (y = 0 ; y+0U < height ; y++)
-    free(png_image[y]);
+  if (height > 0) free(png_image[0]);
   free(png_image);
-  png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
-
   return 1;
 }
 
