@@ -39,7 +39,7 @@
  */
 
 /* TODO(pts): Remove unused command-line flags and their help. */
-/* TODO(pts): Don't resize of target size is same or a bit less than source size. */
+/* TODO(pts): Don't scale if target size is just a mit more or less than source size. (On exact match we already skip scaling.) */
 
 #include <ctype.h>
 #include <dirent.h>
@@ -422,8 +422,6 @@ static char load_image_gif(struct image *img, const char *filename, FILE *infile
 
 /* --- PNG support */
 
-/* !! no fatal errors, with cleanups (free), no exit(...) */
-
 /*
 ** based on png22pnm.c
 ** edited by pts@fazekas.hu at Tue Dec 10 16:33:53 CET 2002
@@ -472,6 +470,7 @@ static char load_image_gif(struct image *img, const char *filename, FILE *infile
 
 struct swigpng_jmpbuf_wrapper {
   jmp_buf jmpbuf;
+  const char *filename;
 };
 
 /* TODO(pts): Speed this up for non-16-bit PNGs. */
@@ -488,7 +487,8 @@ static png_uint_16 swigpng_gamma_correct(png_uint_16 v, float gamma, float maxva
 }
 
 static void swigpng_error_handler(png_structp png_ptr, png_const_charp msg) {
-  struct swigpng_jmpbuf_wrapper *jmpbuf_ptr;
+  struct swigpng_jmpbuf_wrapper *jmpbuf_ptr = png_get_error_ptr(png_ptr);
+  if (jmpbuf_ptr == NULL) abort();  /* we are completely hosed now */
 
   /* this function, aside from the extra step of retrieving the "error
    * pointer" (below) and the fact that it exists within the application
@@ -499,19 +499,20 @@ static void swigpng_error_handler(png_structp png_ptr, png_const_charp msg) {
    * regardless of whether _BSD_SOURCE or anything else has (or has not)
    * been defined. */
 
-  fprintf(stderr, "fatal libpng error: %s\n", msg);
-  fflush(stderr);
-  jmpbuf_ptr = png_get_error_ptr(png_ptr);
-  if (jmpbuf_ptr == NULL) abort();  /* we are completely hosed now */
+  fprintf(stderr, "%s: error reading PNG file: %s: %s\n", g_flags.progname, jmpbuf_ptr->filename, msg);
   longjmp(jmpbuf_ptr->jmpbuf, 1);
 }
 
 static char load_image_png(struct image *img, const char *filename, FILE *infile, const char *tmp_filename) {
   struct swigpng_jmpbuf_wrapper swigpng_jmpbuf_struct;
   unsigned char sig_buf[4];
-  png_struct *png_ptr;
-  png_info *info_ptr;
-  png_byte **png_image;
+  /* Without volatile, `gcc -O3' optimizes away some memory accesses. */
+  png_struct * png_ptr;
+  png_info * info_ptr;
+  /* Without volatile, `gcc -O3' optimizes away some memory accesses. */
+  png_byte ** volatile png_image;
+  /* Without volatile, `gcc -O3' optimizes away some memory accesses. */
+  unsigned char * volatile img_data;
   png_byte *png_pixel;
   png_uint_32 width;
   png_uint_32 height;
@@ -549,22 +550,34 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
   do_mix = 1;
   /* This (alpha channel mixing) works with both RGBA and palette. */
   /* displaygamma = ... */
+  png_image = NULL;
+  img_data = NULL;
 
-  if (fread (sig_buf, 1, sizeof(sig_buf), infile) != sizeof(sig_buf)) {
-    { fprintf(stderr, "input file empty or too short\n"); exit(1); }
+  if (fread(sig_buf, 1, sizeof(sig_buf), infile) != sizeof(sig_buf)) {
+    fprintf(stderr, "%s: not a PNG file (empty or too short): %s\n", g_flags.progname, filename);
+    g_flags.exit_code = EXIT_FAILURE;
+    return 0;
   }
-  if (png_sig_cmp (sig_buf, (png_size_t) 0, (png_size_t) sizeof(sig_buf)) != 0) {
-    { fprintf(stderr, "input file not a PNG file\n"); exit(1); }
+  if (png_sig_cmp(sig_buf, (png_size_t) 0, (png_size_t) sizeof(sig_buf)) != 0) {
+    fprintf(stderr, "%s: not a PNG file (bad signature): %s\n", g_flags.progname, filename);
+    g_flags.exit_code = EXIT_FAILURE;
+    return 0;
   }
 
   check_alloc(png_ptr = png_create_read_struct (PNG_LIBPNG_VER_STRING,
     &swigpng_jmpbuf_struct, swigpng_error_handler, NULL));
+  swigpng_jmpbuf_struct.filename = filename;
 
   check_alloc(info_ptr = png_create_info_struct (png_ptr));
 
   if (setjmp(swigpng_jmpbuf_struct.jmpbuf)) {
+    /* We reach this if there was an error decoding the PNG file, already printed by swigpng_error_handler. */
     png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
-    { fprintf(stderr, "setjmp found error\n"); exit(1); }
+    if (png_image) free(png_image[0]);
+    free(png_image);
+    free(img_data); img->data = NULL;  /* This shouldn't be needed. */
+    g_flags.exit_code = EXIT_FAILURE;
+    return 0;
   }
 
   png_init_io (png_ptr, infile);
@@ -620,7 +633,7 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
   } else {
     trans_r = trans_g = trans_b = trans_gray = 0;
   }
-  
+
   if (png_get_valid(png_ptr, info_ptr, PNG_INFO_PLTE)) {
     png_get_PLTE(png_ptr, info_ptr, &palette, &num_palette);
   } else {
@@ -637,7 +650,7 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
                  &phys_unit_type);
   }
 
-  check_alloc(png_image = (png_byte **)malloc (height * sizeof (png_byte*)));
+  if (height > 0) check_alloc(png_image = (png_byte **)malloc (height * sizeof (png_byte*)));
 
   if (bit_depth == 16)
     linesize = 2 * width;
@@ -652,8 +665,10 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
     linesize *= 4;
   } else if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_PALETTE) {
   } else {
-    fprintf(stderr, "unknown PNG color type: %d\n", (int)color_type);
-    exit(1);
+    png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
+    fprintf(stderr, "%s: unsupported PNG color type: %s: %d\n", g_flags.progname, filename, (int)color_type);
+    g_flags.exit_code = EXIT_FAILURE;
+    return 0;
   }
 
   if (bit_depth < 8)
@@ -769,16 +784,16 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
     for (y = 1 ; y+0U < height ; y++) {
       png_image[y] = png_image[0] + linesize * y;
     }
+    png_read_image(png_ptr, png_image);
+    png_read_end(png_ptr, info_ptr);
   }
-
-  png_read_image(png_ptr, png_image);
-  png_read_end(png_ptr, info_ptr);
+  /* This sets png_ptr=NULL as a side effect. Also calling it twice is a no-op. */
   png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 
   /* if (has_phys & x_pixels_per_unit != y_pixels_per_unit) warning("Non-square pixels."); */
 
-  check_alloc(img->data = pr = malloc(3 * img->width * img->height * sizeof(unsigned char)));
-  /* TODO(pts): Can't libpng decode directly to RGB, with mixing and gamma correction? */
+  check_alloc(img_data = img->data = pr = malloc(3 * img->width * img->height * sizeof(unsigned char)));
+  /* TODO(pts): Can't libpng decode directly to RGB, with mixing and gamma correction? Look for png_destroy_read_struct on Google. */
   for (y = 0 ; y+0U < height ; y++) {
     png_pixel = png_image[y];
     for (x = 0 ; x+0U < width ; x++) {
@@ -849,7 +864,7 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
     }
   }
 
-  if (height > 0) free(png_image[0]);
+  if (png_image) free(png_image[0]);
   free(png_image);
   return 1;
 }
