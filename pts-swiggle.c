@@ -199,6 +199,20 @@ main(int argc, char **argv)
 	return g_flags.exit_code;
 }
 
+typedef enum imgfmt_t {
+  IF_UNKNOWN = 0,
+  IF_JPEG = 1,
+  IF_PNG = 2,
+  IF_GIF = 3,
+} imgfmt_t;
+
+static imgfmt_t detect_image_format(const char *header, unsigned header_size) {
+	return header_size >= 4 && 0 == memcmp(header, "\xff\xd8\xff", 3) ? IF_JPEG
+	     : header_size >= 24 && 0 == memcmp(header, "\211PNG\r\n\032\n", 8) ? IF_PNG
+	     : header_size >= 7 && (0 == memcmp(header, "GIF87a", 6) || 0 == memcmp(header, "GIF89a", 6)) ? IF_GIF
+	     : IF_UNKNOWN;
+}
+
 /*
  * Opens the directory given in parameter "dir" and reads the filenames
  * of all .jpg files, stores them in a list and initiates the creation
@@ -217,7 +231,8 @@ static void process_dir(char *dir) {
 	struct stat sb;
 	DIR *thisdir;
 	FILE *f;
-	char header[3];
+	char header[24];
+	unsigned header_size;
 	int stat_result;
 
 	if ((thisdir = opendir(dir)) == NULL) {
@@ -272,7 +287,8 @@ static void process_dir(char *dir) {
 			continue;
 		}
 		if ((f = fopen(fn, "rb")) != NULL) {
-			if (3 != fread(header, 1, 3, f) || 0 != memcmp(header, "\xff\xd8\xff", 3 * sizeof(char))) {
+			header_size = fread(header, sizeof(char), sizeof(header), f);
+			if (ferror(f) || header_size == 0 || detect_image_format(header, header_size) == IF_UNKNOWN) {
 				fclose(f);
 				free(fn);
 				continue;  /* Silently skip non-JPEG files. */
@@ -955,11 +971,11 @@ static char load_image_jpeg(struct image *img, const char *filename, FILE *infil
 	return 1;
 }
 
-
 /* Returns whether the scaled image file should be produced. */
 static char load_image(struct image *img, const char *filename, const char *tmp_filename) {
 	FILE *infile;
 	char header[24];
+	imgfmt_t fmt;
 	unsigned header_size;
 	char result;
 
@@ -984,20 +1000,22 @@ static char load_image(struct image *img, const char *filename, const char *tmp_
 		fprintf(stderr, "%s: can't seek in %s: %s\n", g_flags.progname, filename, strerror(errno));
 		g_flags.exit_code = EXIT_FAILURE;
 		result = 0;
-	} else if (header_size >= 4 && 0 == memcmp(header, "\xff\xd8\xff", 3)) {
+	} else if ((fmt = detect_image_format(header, header_size)) == IF_UNKNOWN) { do_unknown:
+		if (header_size == 0) {
+			fprintf(stderr, "%s: empty image file: %s\n", g_flags.progname, filename);
+		} else {
+			fprintf(stderr, "%s: unknown image file format: %s\n", g_flags.progname, filename);
+		}
+		g_flags.exit_code = EXIT_FAILURE;
+		result = 0;
+	} else if (fmt == IF_JPEG) {
 		result = load_image_jpeg(img, filename, infile, tmp_filename);
-	} else if (header_size >= 24 && 0 == memcmp(header, "\211PNG\r\n\032\n", 8)) {
+	} else if (fmt == IF_PNG) {
 		result = load_image_png(img, filename, infile, tmp_filename);
-	} else if (header_size >= 7 && (0 == memcmp(header, "GIF87a", 6) || 0 == memcmp(header, "GIF89a", 6))) {
+	} else if (fmt == IF_GIF) {
 		result = load_image_gif(img, filename, infile, tmp_filename);
-	} else if (header_size == 0) {
-		fprintf(stderr, "%s: empty image file: %s\n", g_flags.progname, filename);
-		g_flags.exit_code = EXIT_FAILURE;
-		result = 0;
 	} else {
-		fprintf(stderr, "%s: unknown image file format: %s\n", g_flags.progname, filename);
-		g_flags.exit_code = EXIT_FAILURE;
-		result = 0;
+		goto do_unknown;  /* Shouldn't happen. */
 	}
 	fclose(infile);
 	return result;
