@@ -1361,7 +1361,7 @@ static int DGifBufferedInput(FILE *File, GifByteType *Buf,
 * the GifFileType pointer.  Call DGifOpenFileName() or DGifOpenFileHandle()   *
 * first to initialize I/O.  Its inverse is EGifSpew().			      *
 ******************************************************************************/
-int DGifSlurp(GifFileType *GifFile)
+int DGifSlurp(GifFileType *GifFile, char do_decode_first_image_only)
 {
     static unsigned InterlacedOffset[] = { 0, 4, 2, 1 }, /* The way Interlaced image should. */
                     InterlacedJumps[] = { 8, 8, 4, 2 };  /* be read - offsets and jumps... */
@@ -1423,6 +1423,7 @@ int DGifSlurp(GifFileType *GifFile)
 		      == GIF_ERROR)
 		      return(GIF_ERROR);
 		}
+		if (do_decode_first_image_only) return GIF_OK;
 		break;
 
 	    case EXTENSION_RECORD_TYPE:

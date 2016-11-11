@@ -390,7 +390,7 @@ static char load_image_gif(struct image *img, const char *filename, FILE *infile
 	unsigned char *pr;
 	const unsigned char *pi, *pi_end;
 
-	if (0==(giff=DGifOpenFILE(infile)) || GIF_ERROR==DGifSlurp(giff)) {
+	if (0==(giff=DGifOpenFILE(infile)) || GIF_ERROR==DGifSlurp(giff, 1 /* do_decode_first_image_only */)) {
 		fprintf(stderr, "%s: error reading GIF file: %s: %s\n", g_flags.progname, filename, ((err=GetGifError()) ? err : "unknown error"));
 		g_flags.exit_code = EXIT_FAILURE;
 		if (giff) DGifCloseFile(giff);

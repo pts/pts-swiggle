@@ -137,7 +137,7 @@ GIF_EXTERN GifFileType *DGifOpenFileName(const char *GifFileName);
 GIF_EXTERN GifFileType *DGifOpenFileHandle(int GifFileHandle);
 #endif
 GIF_EXTERN GifFileType *DGifOpenFILE(void/*FILE*/ *f);
-GIF_EXTERN int DGifSlurp(GifFileType *GifFile);
+GIF_EXTERN int DGifSlurp(GifFileType *GifFile, char do_decode_first_image_only);
 GIF_EXTERN int DGifGetScreenDesc(GifFileType *GifFile);
 GIF_EXTERN int DGifGetRecordType(GifFileType *GifFile, GifRecordType *GifType);
 GIF_EXTERN int DGifGetImageDesc(GifFileType *GifFile);
