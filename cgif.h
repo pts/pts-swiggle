@@ -231,7 +231,6 @@ GIF_EXTERN void MakeExtension(SavedImage *New, int Function);
 GIF_EXTERN int AddExtensionBlock(SavedImage *New, int Len, GifByteType ExtData[]);
 GIF_EXTERN void FreeExtension(SavedImage *Image);
 
-GIF_EXTERN SavedImage *MakeSavedImage(GifFileType *GifFile, SavedImage *CopyFrom);
 GIF_EXTERN void FreeSavedImages(GifFileType *GifFile);
 
 GIF_EXTERN int _GifError;
