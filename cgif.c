@@ -1274,6 +1274,10 @@ static int DGifDecompressLine(GifFileType *GifFile, GifPixelType *Line,
 		    Line[i++] = Stack[--StackPtr];
 	    }
 	    if (LastCode != NO_SUCH_CODE) {
+	        if (Private->RunningCode < 2 || Private->RunningCode - 2 > LZ_MAX_CODE) {
+		    _GifError = D_GIF_ERR_IMAGE_DEFECT;
+		    return GIF_ERROR;
+	        }
 		Prefix[Private->RunningCode - 2] = LastCode;
 
 		if (CrntCode == Private->RunningCode - 2) {
