@@ -248,9 +248,12 @@ static void process_dir(char *dir) {
 	subdirlist = NULL;
 	subdircount = subdircapacity = 0;
 	while ((dent = readdir(thisdir)) != NULL) {
+		size_t d_name_size;
 		if (dent->d_name[0] == '.' &&  /* Skip "." and ".." */
 		    (dent->d_name[1] == '\0' || (dent->d_name[1] == '.' && dent->d_name[2] == '\0'))) continue;
-		check_alloc(fn = malloc(dir_size + strlen(dent->d_name) + 2));
+		d_name_size = strlen(dent->d_name);
+		if (d_name_size >= 7 && 0 == memcmp(dent->d_name + d_name_size - 7, ".th.jpg", 7 * sizeof(char))) continue;
+		check_alloc(fn = malloc(dir_size + d_name_size + 2));
 		sprintf(fn, "%s/%s", dir, dent->d_name);
 		stat_result = 0;
 		/* TODO(pts): Don't enter to symlinks to directories. */
