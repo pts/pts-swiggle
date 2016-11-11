@@ -1527,7 +1527,7 @@ int DGifSlurp(GifFileType *GifFile)
   			  memcpy(ep->Bytes,ExtData,ep->ByteCount * sizeof(char));
   			#else
   			  if (ExtData==NULL) break;
-  			  AddExtensionBlock(sp, ExtData[0], ExtData+1);
+  			  if (sp) AddExtensionBlock(sp, ExtData[0], ExtData+1);
   			#endif
 		    }
 		}
