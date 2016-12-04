@@ -75,8 +75,14 @@ static struct {
 	int bilinear;
 	int recursive;
 	int also_small;
+	/* Bitwise or of:
+	 * 1: Invalid command-line flags or arguments.
+	 * 2: File not found, I/O error, runtime error or abnormal condition.
+	 * 4: Data error (not I/O error) loading file as an image.
+	 * 8: File specified on the command-line is not an image.
+	 */
 	int exit_code;
-} g_flags = { "", 480, 0, 0, 0, 0, EXIT_SUCCESS };
+} g_flags = { "", 480, 0, 0, 0, 0, EXIT_SUCCESS /* 0 */ };
 
 /*
  * Function declarations.
@@ -133,7 +139,7 @@ main(int argc, char **argv)
 				fprintf(stderr, "%s: invalid argument '-H "
 				    "%s'\n", g_flags.progname, optarg);
 				usage();
-				exit(EXIT_FAILURE);
+				exit(EXIT_FAILURE);  /* 1 */
 			}
 			break;
 		case 'R':
@@ -160,7 +166,7 @@ main(int argc, char **argv)
 			exit(EXIT_SUCCESS);
 		default:
 			usage();
-			exit(EXIT_FAILURE);
+			exit(EXIT_FAILURE);  /* 1 */
 		}
 	}
 
@@ -168,7 +174,7 @@ main(int argc, char **argv)
 	argv += optind;
 	if (argc < 1) {
 		usage();
-		exit(EXIT_FAILURE);
+		exit(EXIT_FAILURE);  /* 1 */
 	}
 
 	/* Put the inputs to increasing order for deterministic processing. */
@@ -178,7 +184,7 @@ main(int argc, char **argv)
 		if (stat(argv[i], &sb)) {
 			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname, argv[i],
 			    strerror(errno));
-			g_flags.exit_code = EXIT_FAILURE;
+			g_flags.exit_code |= 2;
 			continue;
 		}
 
@@ -191,7 +197,7 @@ main(int argc, char **argv)
 		} else {
 			fprintf(stderr, "%s: not a file or directory: %s\n", g_flags.progname,
 			    argv[i]);
-			g_flags.exit_code = EXIT_FAILURE;
+			g_flags.exit_code |= 2;
 		}
 
 	}
@@ -238,7 +244,7 @@ static void process_dir(char *dir) {
 	if ((thisdir = opendir(dir)) == NULL) {
 		fprintf(stderr, "%s: can't opendir(%s): %s\n", g_flags.progname, dir,
 		    strerror(errno));
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		return;
 	}
 
@@ -273,7 +279,7 @@ static void process_dir(char *dir) {
 			fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
 			    fn, strerror(errno));
 			free(fn);
-			g_flags.exit_code = EXIT_FAILURE;
+			g_flags.exit_code |= 2;
 			continue;
 		}
 		if (/* is_dir = */
@@ -294,7 +300,7 @@ static void process_dir(char *dir) {
 			if (ferror(f) || header_size == 0 || detect_image_format(header, header_size) == IF_UNKNOWN) {
 				fclose(f);
 				free(fn);
-				continue;  /* Silently skip non-JPEG files. */
+				continue;  /* Silently skip non-JPEG files when scanning recursively (-R). */
 			}
 			fclose(f);
 		}
@@ -308,7 +314,7 @@ static void process_dir(char *dir) {
 	if (closedir(thisdir)) {
 		fprintf(stderr, "%s: error on closedir(%s): %s", g_flags.progname, dir,
 		    strerror(errno));
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 	}
 	/* Sort imglist according to desired sorting function. */
 	qsort(imglist, imgcount, sizeof(*imglist), sort_by_filename);
@@ -392,13 +398,13 @@ static char load_image_gif(struct image *img, const char *filename, FILE *infile
 
 	if (0==(giff=DGifOpenFILE(infile)) || GIF_ERROR==DGifSlurp(giff, 1 /* do_decode_first_image_only */)) {
 		fprintf(stderr, "%s: error reading GIF file: %s: %s\n", g_flags.progname, filename, ((err=GetGifError()) ? err : "unknown error"));
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 4;
 		if (giff) DGifCloseFile(giff);
 		return 0;
 	}
 	if (giff->ImageCount<1) {
 		fprintf(stderr, "%s: no image in GIF file: %s\n", g_flags.progname, filename);
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 4;
 		DGifCloseFile(giff);
 		return 0;
 	}
@@ -417,7 +423,7 @@ static char load_image_gif(struct image *img, const char *filename, FILE *infile
 	if ((img->outfile = fopen(tmp_filename, "wb")) == NULL) {
 		DGifCloseFile(giff);
 		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname, tmp_filename, strerror(errno));
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		return 0;
 	}
 
@@ -574,12 +580,12 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
 
   if (fread(sig_buf, 1, sizeof(sig_buf), infile) != sizeof(sig_buf)) {
     fprintf(stderr, "%s: not a PNG file (empty or too short): %s\n", g_flags.progname, filename);
-    g_flags.exit_code = EXIT_FAILURE;
+    g_flags.exit_code |= 4;
     return 0;
   }
   if (png_sig_cmp(sig_buf, (png_size_t) 0, (png_size_t) sizeof(sig_buf)) != 0) {
     fprintf(stderr, "%s: not a PNG file (bad signature): %s\n", g_flags.progname, filename);
-    g_flags.exit_code = EXIT_FAILURE;
+    g_flags.exit_code |= 4;
     return 0;
   }
 
@@ -595,7 +601,7 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
     if (png_image) free(png_image[0]);
     free(png_image);
     free(img_data); img->data = NULL;  /* This shouldn't be needed. */
-    g_flags.exit_code = EXIT_FAILURE;
+    g_flags.exit_code |= 4;
     return 0;
   }
 
@@ -622,7 +628,7 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
   if ((img->outfile = fopen(tmp_filename, "wb")) == NULL) {
     png_destroy_read_struct (&png_ptr, &info_ptr, (png_infopp)NULL);
     fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname, tmp_filename, strerror(errno));
-    g_flags.exit_code = EXIT_FAILURE;
+    g_flags.exit_code |= 2;
     return 0;
   }
 
@@ -686,7 +692,7 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
   } else {
     png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
     fprintf(stderr, "%s: unsupported PNG color type: %s: %d\n", g_flags.progname, filename, (int)color_type);
-    g_flags.exit_code = EXIT_FAILURE;
+    g_flags.exit_code |= 4;
     return 0;
   }
 
@@ -913,7 +919,7 @@ static char load_image_jpeg(struct image *img, const char *filename, FILE *infil
 		 */
 		if (has_decompress_started) jpeg_finish_decompress(&dinfo);
 		jpeg_destroy_decompress(&dinfo);
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 4;
 		return 0;
 	}
 	jpeg_create_decompress(&dinfo);
@@ -936,7 +942,7 @@ static char load_image_jpeg(struct image *img, const char *filename, FILE *infil
 	if ((img->outfile = fopen(tmp_filename, "wb")) == NULL) {
 		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname, tmp_filename, strerror(errno));
 		jpeg_destroy_decompress(&dinfo);
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		return 0;
 	}
 
@@ -990,26 +996,27 @@ static char load_image(struct image *img, const char *filename, const char *tmp_
 	 */
 	if ((infile = fopen(filename, "rb")) == NULL) {
 		fprintf(stderr, "%s: can't fopen(%s): %s\n", g_flags.progname, filename, strerror(errno));
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		return 0;
 	}
 
 	header_size = fread(header, sizeof(char), sizeof(header), infile);
 	if (ferror(infile)) {
 		fprintf(stderr, "%s: can't read headers from %s: %s\n", g_flags.progname, filename, strerror(errno));
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		result = 0;
 	} else if (fseek(infile, 0, SEEK_SET) != 0) {
 		fprintf(stderr, "%s: can't seek in %s: %s\n", g_flags.progname, filename, strerror(errno));
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		result = 0;
 	} else if ((fmt = detect_image_format(header, header_size)) == IF_UNKNOWN) { do_unknown:
+		/* This code is not reached for non-image files in a recursively scanned dir, detect_image_format was called earlier. */
 		if (header_size == 0) {
 			fprintf(stderr, "%s: empty image file: %s\n", g_flags.progname, filename);
 		} else {
 			fprintf(stderr, "%s: unknown image file format: %s\n", g_flags.progname, filename);
 		}
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 8;
 		result = 0;
 	} else if (fmt == IF_JPEG) {
 		result = load_image_jpeg(img, filename, infile, tmp_filename);
@@ -1041,7 +1048,7 @@ static void create_thumbnail(char *filename) {
 	if (stat(filename, &sb)) {
 		fprintf(stderr, "%s: can't stat(%s): %s\n", g_flags.progname,
 		    filename, strerror(errno));
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		return;
 	}
 
@@ -1131,7 +1138,7 @@ static void create_thumbnail(char *filename) {
 		jpeg_destroy_compress(&cinfo);
 		free(o);
 		unlink(tmp_filename);
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		return;
 	}
 	fclose(img->outfile);
@@ -1144,7 +1151,7 @@ static void create_thumbnail(char *filename) {
 		    "%s\n", g_flags.progname, tmp_filename, final,
 		    strerror(errno));
 		unlink(tmp_filename);
-		g_flags.exit_code = EXIT_FAILURE;
+		g_flags.exit_code |= 2;
 		return;
 	}
 }
@@ -1216,7 +1223,6 @@ usage(void)
 	fprintf(stderr, "              '.description' files\n");
 	fprintf(stderr, "   -a     ... also create thumbnails for small files (no scaling)\n");
 	fprintf(stderr, "   -v     ... show version info\n\n");
-	exit(EXIT_FAILURE);
 }
 
 /*
