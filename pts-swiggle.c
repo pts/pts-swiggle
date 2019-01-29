@@ -562,7 +562,7 @@ static char load_image_png(struct image *img, const char *filename, FILE *infile
   int trans_mix;
   unsigned char *pr;
   png_uint_16 maxval;
-  png_uint_16 bgr, bgg, bgb;  /* Background colors. */
+  volatile png_uint_16 bgr, bgg, bgb;  /* Background colors. */
   float displaygamma;
   float totalgamma;
   char do_mix;
