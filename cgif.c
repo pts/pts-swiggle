@@ -127,7 +127,7 @@ GIF_EXTERN FILE *fdopen (int fildes, const char *mode); /* GCC 3.0 SUXX */
 static void *xmalloc(size_t size) {
   void *result = malloc(size + (size == 0));
   if (!result) {
-    write(2, "CGIF out of memory\n", 19);
+    (void)!write(2, "CGIF out of memory\n", 19);
     abort();
   }
   return result;
@@ -136,7 +136,7 @@ static void *xmalloc(size_t size) {
 static void *xrealloc(void *ptr, size_t size) {
   void *result = realloc(ptr, size + (size == 0));
   if (!result) {
-    write(2, "CGIF out of memory\n", 19);
+    (void)!write(2, "CGIF out of memory\n", 19);
     abort();
   }
   return result;
