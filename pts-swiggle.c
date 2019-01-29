@@ -1204,23 +1204,16 @@ usage(void)
 	fprintf(stderr, "pts-swiggle [options] /path/to/gallery\n\n");
 	fprintf(stderr, "Available options:\n");
 	fprintf(stderr, "   -R         process directories recursively\n");
-	fprintf(stderr, "   -c <x> ... columns per thumbnail index page\n");
 	fprintf(stderr, "   -r <y> ... rows per thumbnail index page\n");
-	fprintf(stderr, "   -h <i> ... height of the thumbnails in pixel\n");
 	fprintf(stderr, "   -H <j> ... height of the scaled images in pixel "
 	    "(default: %d)\n", g_flags.scaleheight);
 	fprintf(stderr, "   -f     ... force rebuild of everything; ignore "
 	    "cache\n");
-	fprintf(stderr, "   -o     ... don't remove orphaned files\n");
 	fprintf(stderr, "   -l     ... use bilinear resizing instead of "
 	    "bicubic\n");
 	fprintf(stderr, "              (faster, but image quality is poor)\n");
-	fprintf(stderr, "   -s <n> ... sort images according to argument\n");
 	fprintf(stderr, "              ('name', 'size', 'mtime'; default is "
 	    "'name')\n");
-	fprintf(stderr, "   -d     ... title string for gallery and albums, "
-	    "if not provided in\n");
-	fprintf(stderr, "              '.description' files\n");
 	fprintf(stderr, "   -a     ... also create thumbnails for small files (no scaling)\n");
 	fprintf(stderr, "   -v     ... show version info\n\n");
 }
