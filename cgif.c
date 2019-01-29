@@ -57,11 +57,11 @@ GIF_EXTERN FILE *fdopen (int fildes, const char *mode); /* GCC 3.0 SUXX */
 #include "cgif.h"
 
 /**** pts ****/
-#include <stdlib.h> /* malloc(), calloc(), free(), realloc() */
+#include <stdlib.h> /* malloc(), free(), realloc() */
 #include <string.h> /* memset() */
 
 
-//#include <unistd.h>
+#include <unistd.h>  /* write() */
 
 #if USE_CGIF_FDOPEN
 #include <fcntl.h> /* open() */
@@ -123,6 +123,24 @@ GIF_EXTERN FILE *fdopen (int fildes, const char *mode); /* GCC 3.0 SUXX */
 #include <assert.h>
 
 /* ---- */
+
+static void *xmalloc(size_t size) {
+  void *result = malloc(size + (size == 0));
+  if (!result) {
+    write(2, "CGIF out of memory\n", 19);
+    abort();
+  }
+  return result;
+}
+
+static void *xrealloc(void *ptr, size_t size) {
+  void *result = realloc(ptr, size + (size == 0));
+  if (!result) {
+    write(2, "CGIF out of memory\n", 19);
+    abort();
+  }
+  return result;
+}
 
 /* --- gif_err.c */
 
@@ -274,13 +292,10 @@ ColorMapObject *MakeMapObject(int ColorCount, GifColorType *ColorMap)
     if (ColorCount != (1 << BitSize(ColorCount)))
 	return((ColorMapObject *)NULL);
 
-    Object = (ColorMapObject *)malloc(sizeof(ColorMapObject));
-    if (Object == (ColorMapObject *)NULL)
-	return((ColorMapObject *)NULL);
+    Object = (ColorMapObject *)xmalloc(sizeof(ColorMapObject));
 
-    Object->Colors = (GifColorType *)calloc(ColorCount, sizeof(GifColorType));
-    if (Object->Colors == (GifColorType *)NULL)
-	return((ColorMapObject *)NULL);
+    Object->Colors = (GifColorType *)xmalloc(ColorCount * sizeof(GifColorType));
+    memset(Object->Colors, '\0', ColorCount * sizeof(GifColorType));
 
     Object->ColorCount = ColorCount;
     Object->BitsPerPixel = BitSize(ColorCount);
@@ -406,7 +421,7 @@ ColorMapObject *UnionColorMap(
 	/* perhaps we can shrink the map? */
 	if (RoundUpTo < ColorUnion->ColorCount)
 	    ColorUnion->Colors
-		= (GifColorType *)realloc(Map, sizeof(GifColorType)*RoundUpTo);
+		= (GifColorType *)xrealloc(Map, sizeof(GifColorType)*RoundUpTo);
     }
 
     ColorUnion->ColorCount = RoundUpTo;
@@ -446,10 +461,10 @@ int AddExtensionBlock(SavedImage *New, int Len, GifByteType ExtData[])
     ExtensionBlock	*ep;
 
     if (New->ExtensionBlocks == NULL)
-	New->ExtensionBlocks = (ExtensionBlock *)malloc(sizeof(ExtensionBlock));
+	New->ExtensionBlocks = (ExtensionBlock *)xmalloc(sizeof(ExtensionBlock));
     else
 	New->ExtensionBlocks =
-	    (ExtensionBlock *)realloc(New->ExtensionBlocks,
+	    (ExtensionBlock *)xrealloc(New->ExtensionBlocks,
 		      sizeof(ExtensionBlock) * (New->ExtensionBlockCount + 1));
 
     if (New->ExtensionBlocks == NULL)
@@ -457,8 +472,7 @@ int AddExtensionBlock(SavedImage *New, int Len, GifByteType ExtData[])
 
     ep = &New->ExtensionBlocks[New->ExtensionBlockCount++];
 
-    if ((ep->Bytes = (GifByteType *)malloc(ep->ByteCount = Len)) == NULL)
-	return(GIF_ERROR);
+    ep->Bytes = (GifByteType *)xmalloc(ep->ByteCount = Len);
 
     if (ExtData)
 	memcpy(ep->Bytes, ExtData, Len);
@@ -608,19 +622,11 @@ GifFileType *DGifOpenFILE(void/*FILE*/ *f) {
     char Buf[GIF_STAMP_LEN+1];
     GifFileType *GifFile;
     GifFilePrivateType *Private;
-    if ((GifFile = (GifFileType *) malloc(sizeof(GifFileType))) == NULL) {
-	_GifError = D_GIF_ERR_NOT_ENOUGH_MEM;
-	return NULL;
-    }
+    GifFile = (GifFileType *) xmalloc(sizeof(GifFileType));
 
     memset(GifFile, '\0', sizeof(GifFileType));
 
-    if ((Private = (GifFilePrivateType *) malloc(sizeof(GifFilePrivateType)))
-	== NULL) {
-	_GifError = D_GIF_ERR_NOT_ENOUGH_MEM;
-	free((char *) GifFile);
-	return NULL;
-    }
+    Private = (GifFilePrivateType *) xmalloc(sizeof(GifFilePrivateType));
     GifFile->Private = (VoidPtr) Private;
     /* Private->FileHandle = FileHandle; */
     Private->File = (FILE*)f;
@@ -786,15 +792,11 @@ int DGifGetImageDesc(GifFileType *GifFile)
 
     /**** pts ****/
     if (NULL!=GifFile->SavedImages) {
-      GifFile->SavedImages = (SavedImage *)realloc(GifFile->SavedImages,
+      GifFile->SavedImages = (SavedImage *)xrealloc(GifFile->SavedImages,
 		    sizeof(SavedImage) * (GifFile->ImageCount + 1));
     } else {
       assert(GifFile->ImageCount==0);
-      GifFile->SavedImages = (SavedImage *)malloc(sizeof(SavedImage));
-    }
-    if (NULL==GifFile->SavedImages) {
-        _GifError = D_GIF_ERR_NOT_ENOUGH_MEM;
-        return GIF_ERROR;
+      GifFile->SavedImages = (SavedImage *)xmalloc(sizeof(SavedImage));
     }
 
     {
@@ -1410,8 +1412,7 @@ int DGifSlurp(GifFileType *GifFile, char do_decode_first_image_only)
 		ext=noext;
 		
 		/**** pts ****/
-		sp->RasterBits = (GifPixelType*) malloc((0L+sp->ImageDesc.Width) * sp->ImageDesc.Height * sizeof(GifPixelType));
-		if (sp->RasterBits==NULL) { _GifError=D_GIF_ERR_NOT_ENOUGH_MEM; return GIF_ERROR; }
+		sp->RasterBits = (GifPixelType*) xmalloc((0L+sp->ImageDesc.Width) * sp->ImageDesc.Height * sizeof(GifPixelType));
 		if (sp->ImageDesc.Interlace) {
 		  unsigned i, j, Height=sp->ImageDesc.Height, Width=sp->ImageDesc.Width;
 		  /* Need to perform 4 passes on the images: */
@@ -1434,7 +1435,7 @@ int DGifSlurp(GifFileType *GifFile, char do_decode_first_image_only)
 		    #if 0 /**** pts ****/
 		      ep = &ext.ExtensionBlocks[ext.ExtensionBlockCount++];
 		      ep->ByteCount = ExtData[0];
-		      ep->Bytes = (GifByteType *)malloc(ep->ByteCount * sizeof(GifByteType));
+		      ep->Bytes = (GifByteType *)xmalloc(ep->ByteCount * sizeof(GifByteType));
 		      memcpy(ep->Bytes, ExtData, ep->ByteCount * sizeof(char));
 		    #else
                       /**** pts ****/
@@ -1457,7 +1458,7 @@ int DGifSlurp(GifFileType *GifFile, char do_decode_first_image_only)
 		        #if 0 /**** pts ****/
   			  ep = &ext.ExtensionBlocks[ext.ExtensionBlockCount++];
   			  ep->ByteCount = ExtData[0];
-  			  ep->Bytes = (GifByteType *)malloc(ep->ByteCount * sizeof(GifByteType));
+			  ep->Bytes = (GifByteType *)xmalloc(ep->ByteCount * sizeof(GifByteType));
   			  memcpy(ep->Bytes,ExtData,ep->ByteCount * sizeof(char));
   			#else
   			  if (ExtData==NULL) break;
